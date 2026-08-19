@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.env
+samples/*
+!samples/.gitkeep
+output/*
+!output/.gitkeep
+*.mp4
+*.mp3
+*.wav
+*.mov
+.DS_Store
+venv/
+node_modules/
+.next/

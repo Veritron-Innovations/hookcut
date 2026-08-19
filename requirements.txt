@@ -1,0 +1,17 @@
+# Transcription
+openai-whisper
+
+# LLM API (Gemini free tier for testing)
+google-genai
+
+# Audio analysis (for music climax/energy detection)
+librosa
+
+# Env vars
+python-dotenv
+
+# Album art extraction from mp3 ID3 tags
+mutagen
+
+# Image compositing for vertical video background
+Pillow
