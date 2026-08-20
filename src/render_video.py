@@ -69,10 +69,17 @@ def build_ass_subtitles(
     output_path: str,
 ) -> str:
     """
-    Build an .ass subtitle file for karaoke-style lyrics, using only the
-    Whisper segments that fall within [clip_start, clip_end], re-timed to
-    start at 0 within the clip.
+    Build a karaoke-style .ass subtitle file: the current lyric line shows
+    large and highlights word-by-word as it's sung (via ASS \\k karaoke
+    tags), with the next line visible smaller/dimmer underneath as a
+    preview - similar to Spotify/Apple Music lyric displays.
+
+    Uses word-level timestamps (segments[i]["words"]), re-timed to start at
+    0 within the clip. Falls back to plain per-segment lines if word-level
+    data isn't available (e.g. an older transcript).
     """
+    from lyric_lines import group_into_lines, pair_current_next
+
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {CANVAS_W}
@@ -80,28 +87,70 @@ PlayResY: {CANVAS_H}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial Black,68,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,2,2,60,60,220,1
+Style: Active,Arial Black,68,&H0000D7FF,&H00E8E8E8,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,2,2,60,60,300,1
+Style: Preview,Arial Black,48,&H00999999,&H00999999,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,2,2,60,60,190,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
-    lines = []
-    for seg in segments:
-        if seg["end"] < clip_start or seg["start"] > clip_end:
-            continue
-        rel_start = max(seg["start"] - clip_start, 0)
-        rel_end = min(seg["end"] - clip_start, clip_end - clip_start)
+    all_lines = group_into_lines(segments)
+
+    if not all_lines:
+        # No word-level timing available (e.g. an older transcript) -
+        # fall back to plain per-segment lines, no karaoke/preview.
+        events = []
+        for seg in segments:
+            if seg["end"] < clip_start or seg["start"] > clip_end:
+                continue
+            rel_start = max(seg["start"] - clip_start, 0)
+            rel_end = min(seg["end"] - clip_start, clip_end - clip_start)
+            if rel_end <= rel_start:
+                continue
+            text = seg["text"].strip().replace("\n", " ")
+            events.append(
+                f"Dialogue: 0,{seconds_to_ass_time(rel_start)},{seconds_to_ass_time(rel_end)},"
+                f"Active,,0,0,0,,{text}"
+            )
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_text(header + "\n".join(events))
+        return output_path
+
+    clip_lines = [
+        l for l in all_lines
+        if l["end"] >= clip_start and l["start"] <= clip_end and l["words"]
+    ]
+
+    paired = pair_current_next(clip_lines)
+
+    events = []
+    for line in paired:
+        rel_start = max(line["start"] - clip_start, 0)
+        rel_end = min(line["end"] - clip_start, clip_end - clip_start)
         if rel_end <= rel_start:
             continue
-        text = seg["text"].strip().replace("\n", " ")
-        lines.append(
-            f"Dialogue: 0,{seconds_to_ass_time(rel_start)},{seconds_to_ass_time(rel_end)},"
-            f"Default,,0,0,0,,{text}"
+
+        # Active line: word-by-word karaoke highlight
+        karaoke_text = " ".join(
+            f"{{\\k{max(1, round((w['end'] - w['start']) * 100))}}}{w['word']}"
+            for w in line["words"]
+        )
+        events.append(
+            f"Dialogue: 1,{seconds_to_ass_time(rel_start)},{seconds_to_ass_time(rel_end)},"
+            f"Active,,0,0,0,,{karaoke_text}"
         )
 
+        # Preview: the next line, shown dim/static for the same duration
+        next_line = line.get("next_line")
+        if next_line:
+            preview_text = " ".join(w["word"] for w in next_line["words"])
+            events.append(
+                f"Dialogue: 0,{seconds_to_ass_time(rel_start)},{seconds_to_ass_time(rel_end)},"
+                f"Preview,,0,0,0,,{preview_text}"
+            )
+
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(output_path).write_text(header + "\n".join(lines))
+    Path(output_path).write_text(header + "\n".join(events))
     return output_path
 
 

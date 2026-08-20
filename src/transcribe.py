@@ -21,19 +21,31 @@ def transcribe(input_path: str, model_size: str = "base") -> dict:
 
     Returns:
         dict with "text" (full transcript) and "segments" (list of
-        {start, end, text} timestamped chunks).
+        {start, end, text, words} timestamped chunks). Each segment's
+        "words" is a list of {word, start, end} - needed for karaoke-style
+        word-by-word lyric highlighting. Word-level timing is noisier than
+        line-level timing, especially on sung (vs spoken) audio - expect
+        close-but-not-frame-perfect accuracy.
     """
     model = whisper.load_model(model_size)
-    result = model.transcribe(input_path, verbose=False)
+    result = model.transcribe(input_path, verbose=False, word_timestamps=True)
 
-    segments = [
-        {
+    segments = []
+    for seg in result["segments"]:
+        words = [
+            {
+                "word": w["word"].strip(),
+                "start": w["start"],
+                "end": w["end"],
+            }
+            for w in seg.get("words", [])
+        ]
+        segments.append({
             "start": seg["start"],
             "end": seg["end"],
             "text": seg["text"].strip(),
-        }
-        for seg in result["segments"]
-    ]
+            "words": words,
+        })
 
     return {
         "text": result["text"].strip(),

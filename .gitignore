@@ -1,6 +1,13 @@
+# --- Python ---
 __pycache__/
 *.pyc
+*.pyo
 .env
+venv/
+backend/venv/
+*.egg-info/
+
+# --- Media samples/output (kept out of version control, .gitkeep preserves the folder) ---
 samples/*
 !samples/.gitkeep
 output/*
@@ -9,7 +16,25 @@ output/*
 *.mp3
 *.wav
 *.mov
+*.m4a
+*.ass
+
+# --- Backend job artifacts (generated per-run, not source) ---
+backend/jobs/*
+!backend/jobs/.gitkeep
+
+# --- Node / Next.js frontend ---
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.env*.local
+frontend/npm-debug.log*
+frontend/next-env.d.ts
+frontend/.turbo/
+
+# --- OS/editor cruft ---
 .DS_Store
-venv/
-node_modules/
-.next/
+Thumbs.db
+.vscode/
+.idea/
