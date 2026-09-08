@@ -38,5 +38,8 @@ frontend/.turbo/
 Thumbs.db
 .vscode/
 .idea/
+<<<<<<< Updated upstream
 frontend/tsconfig.tsbuildinfo
 frontend/next-env.d.ts
+=======
+>>>>>>> Stashed changes

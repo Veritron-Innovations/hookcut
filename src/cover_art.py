@@ -1,10 +1,11 @@
 """
 cover_art.py
 
-Resolves the background image for a vertical video clip:
-1. If the user provided an image explicitly, use that.
-2. Otherwise, try to extract embedded cover art from the mp3's ID3 tags.
-3. If neither exists, return None (caller falls back to a plain background).
+Resolves the background image and embedded lyrics for a video clip:
+1. Cover art: user-provided image > embedded ID3 art (APIC) > None.
+2. Lyrics: reads the embedded ID3 lyrics (USLT) frame if present - Suno
+   tracks commonly have this, containing full accurate lyrics (including
+   section markers like "[Chorus]" and stage directions).
 """
 
 from pathlib import Path
@@ -33,6 +34,25 @@ def extract_embedded_art(mp3_path: str, output_path: str) -> str | None:
             with open(output_path, "wb") as f:
                 f.write(tag.data)
             return output_path
+
+    return None
+
+
+def extract_embedded_lyrics(mp3_path: str) -> str | None:
+    """
+    Pull embedded lyrics (USLT frame) out of an mp3's ID3 tags, if present.
+    Returns the raw lyrics text (including section markers/stage
+    directions - those get filtered out later during alignment, not here),
+    or None if no USLT frame exists.
+    """
+    try:
+        audio = ID3(mp3_path)
+    except Exception:
+        return None
+
+    for tag in audio.values():
+        if tag.FrameID == "USLT":
+            return tag.text
 
     return None
 
@@ -75,3 +95,9 @@ if __name__ == "__main__":
         print(f"Extracted cover art to {result}")
     else:
         print("No embedded cover art found in this mp3.")
+
+    lyrics = extract_embedded_lyrics(mp3_path)
+    if lyrics:
+        print(f"\nFound embedded lyrics ({len(lyrics)} chars):\n{lyrics[:200]}...")
+    else:
+        print("\nNo embedded lyrics found in this mp3.")
