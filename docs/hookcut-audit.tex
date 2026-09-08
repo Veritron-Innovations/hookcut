@@ -1,0 +1,638 @@
+% =====================================================================
+%  hookcut - Product & Interface Audit
+%  Compiles with pdfLaTeX on Overleaf. No external assets required.
+% =====================================================================
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[a4paper,margin=25mm,top=24mm,bottom=26mm]{geometry}
+\usepackage{libertine}                        % serif body + Biolinum sans
+\usepackage[scaled=0.82]{beramono}            % mono
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{tcolorbox}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+
+\tcbuselibrary{breakable,skins}
+
+% ---------- palette ---------------------------------------------------
+\definecolor{ink}      {HTML}{16151C}
+\definecolor{ink2}     {HTML}{403C4D}
+\definecolor{muted}    {HTML}{6D6980}
+\definecolor{rule}     {HTML}{DDD9E7}
+\definecolor{cardbg}   {HTML}{F6F4FA}
+\definecolor{accent}   {HTML}{5B3FD6}
+\definecolor{accentbg} {HTML}{EBE6FB}
+\definecolor{critcol}  {HTML}{A92C48}
+\definecolor{critbg}   {HTML}{FBE9ED}
+\definecolor{warncol}  {HTML}{835507}
+\definecolor{warnbg}   {HTML}{FBF1DE}
+\definecolor{okcol}    {HTML}{2B6A4D}
+
+\color{ink}
+
+% ---------- headings --------------------------------------------------
+\titleformat{\section}
+  {\sffamily\bfseries\Large\color{ink}}{\thesection}{0.7em}{}
+\titleformat{\subsection}
+  {\sffamily\bfseries\large\color{ink}}{\thesubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{22pt}{7pt}
+\titlespacing*{\subsection}{0pt}{16pt}{5pt}
+
+% ---------- helpers ---------------------------------------------------
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\eyebrow}[1]{%
+  {\sffamily\bfseries\footnotesize\color{accent}\MakeUppercase{#1}}\par\vspace{2pt}}
+
+% severity chip
+\newcommand{\chip}[3]{%
+  \colorbox{#1}{\textcolor{#2}{\sffamily\bfseries\scriptsize\,#3\,}}}
+
+% finding title
+\newcommand{\ftitle}[1]{{\sffamily\bfseries\normalsize #1}}
+
+% file reference line
+\newcommand{\fref}[1]{\par\vspace{4pt}{\ttfamily\scriptsize\color{muted}#1}}
+
+% finding container - #1 is the accent colour of the left bar
+\newtcolorbox{finding}[1]{
+  enhanced, breakable,
+  colback=cardbg, colframe=#1,
+  boxrule=0pt, leftrule=3.5pt,
+  arc=0pt, outer arc=0pt,
+  left=11pt, right=11pt, top=9pt, bottom=9pt,
+  before skip=9pt, after skip=9pt
+}
+
+% callout
+\newtcolorbox{callout}[1]{
+  enhanced, breakable,
+  colback=accentbg, colframe=accentbg,
+  boxrule=0pt, arc=3pt,
+  left=14pt, right=14pt, top=11pt, bottom=11pt,
+  before skip=13pt, after skip=13pt,
+  title={\textcolor{accent}{\sffamily\bfseries\scriptsize\MakeUppercase{#1}}},
+  attach title to upper={\par\vspace{5pt}}
+}
+
+% status words in the JTBD table
+\newcommand{\stOK}[1]{\textcolor{okcol}{\sffamily\bfseries\small #1}}
+\newcommand{\stNo}[1]{\textcolor{critcol}{\sffamily\bfseries\small #1}}
+\newcommand{\stPart}[1]{\textcolor{warncol}{\sffamily\bfseries\small #1}}
+
+\setlist[itemize]{leftmargin=1.15em,itemsep=2pt,topsep=4pt}
+\setlist[enumerate]{leftmargin=1.4em,itemsep=6pt,topsep=5pt}
+
+% ---------- running head ---------------------------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancyhead[L]{\sffamily\scriptsize\color{muted}hookcut --- product \& interface audit}
+\fancyhead[R]{\sffamily\scriptsize\color{muted}\thepage}
+
+\begin{document}
+
+% =====================================================================
+%  TITLE
+% =====================================================================
+\begin{titlepage}
+\vspace*{2.2cm}
+\eyebrow{Product \& interface audit}
+\vspace{4pt}
+
+{\sffamily\bfseries\fontsize{34}{38}\selectfont
+hookcut is two products\\
+\textcolor{muted}{wearing one form}\par}
+
+\vspace{16pt}
+{\large\color{ink2}
+A read of the codebase as it stands: what the tool is built to do, where the
+interface stops short of the promise, and what to build first if the next work
+is UI/UX.\par}
+
+\vspace{26pt}
+\textcolor{rule}{\rule{\linewidth}{0.6pt}}
+\vspace{10pt}
+
+{\ttfamily\small\color{muted}
+\begin{tabular}{@{}ll@{}}
+Repository & Veritron-Innovations/hookcut \\
+Commit     & 0c8b27a \\
+Surface    & 1{,}395 lines \\
+Frontend   & 275 lines across 2 files \\
+\end{tabular}\par}
+
+\vfill
+{\ttfamily\scriptsize\color{muted}
+Read of \code{src/}, \code{backend/} and \code{frontend/} in full.\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% =====================================================================
+\section{What hookcut is}
+
+An independent musician or podcaster finishes a track or an episode. To promote
+it they need three to five vertical clips for TikTok, Reels and Shorts. hookcut
+takes the finished file and produces those clips automatically --- \textbf{cut
+from the artist's own audio, not generated}. That distinction is the product's
+stated reason to exist, and it is worth holding onto, because nothing in the
+current interface communicates it.
+
+Three ideas are doing the work. Whisper produces a timestamped transcript. An
+LLM reads that \emph{real} transcript and points at the strongest moments --- it
+is told explicitly that it is selecting, not writing. ffmpeg then cuts those
+exact timestamps out of the source. The LLM never invents content; it only picks
+coordinates.
+
+\begin{callout}{The thesis}
+Every other tool in this category generates media. hookcut cuts it. The whole
+product rests on the output being genuinely the artist's --- which makes
+\emph{provenance} the thing the interface should be showing off, and currently
+doesn't show at all.
+\end{callout}
+
+% =====================================================================
+\section{The pipeline, as built}
+
+Five stages, in a background thread per job, polled every two seconds by the
+browser. These stage names are real --- they are the strings the backend writes
+and the frontend reads.
+
+\vspace{6pt}
+\begin{tabularx}{\linewidth}{@{}l l X@{}}
+\toprule
+{\sffamily\footnotesize\color{muted}STAGE} &
+{\sffamily\footnotesize\color{muted}DOES} &
+{\sffamily\footnotesize\color{muted}SOURCE} \\
+\midrule
+\code{queued}              & Upload accepted          & \code{main.py:104}       \\
+\code{transcribing}        & Whisper transcript       & \code{transcribe.py:13}  \\
+\code{analyzing}           & Gemini picks moments     & \code{analyze.py:74}     \\
+\code{resolving\_cover\_art} & Locate album art       & \code{cover\_art.py:40}  \\
+\code{cutting\_clips}      & ffmpeg renders           & \code{cut.py:112}        \\
+\bottomrule
+\end{tabularx}
+
+\subsection*{Then the pipeline forks on file extension}
+\addcontentsline{toc}{subsection}{The fork}
+
+\vspace{4pt}
+\noindent
+\begin{minipage}[t]{0.48\linewidth}
+\begin{tcolorbox}[enhanced,colback=cardbg,colframe=accent,boxrule=0pt,
+  toprule=3pt,arc=0pt,left=10pt,right=10pt,top=9pt,bottom=9pt]
+{\sffamily\bfseries Audio source --- a song}\par
+{\ttfamily\scriptsize\color{muted}.mp3 .wav .m4a .flac .aac .ogg}\par\vspace{6pt}
+\begin{itemize}[leftmargin=1em]\small
+\item No video exists, so one is \textbf{built}
+\item $1080\times1920$ canvas: blurred art fills the frame, sharp art centred
+\item Word timings grouped into 7-word lines
+\item Karaoke ASS subtitles, word-by-word, with a dim next-line preview
+\item Full \code{libx264} re-encode per clip --- \textbf{slow}
+\end{itemize}
+\end{tcolorbox}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.48\linewidth}
+\begin{tcolorbox}[enhanced,colback=cardbg,colframe=muted,boxrule=0pt,
+  toprule=3pt,arc=0pt,left=10pt,right=10pt,top=9pt,bottom=9pt]
+{\sffamily\bfseries Video source --- a podcast}\par
+{\ttfamily\scriptsize\color{muted}everything else --- .mp4 .mov}\par\vspace{6pt}
+\begin{itemize}[leftmargin=1em]\small
+\item Stream copy, \code{-c copy} --- near-instant
+\item Keeps source aspect ratio, so typically \textbf{16:9}
+\item No vertical reframe
+\item No lyrics, no subtitles, no overlay
+\item Cover art step skipped entirely
+\end{itemize}
+\end{tcolorbox}
+\end{minipage}
+
+\subsection{That fork is the most important fact about this UI}
+
+The two branches produce fundamentally different artefacts. The song path
+returns a finished vertical video with synced lyrics burned in --- genuinely
+close to postable. The podcast path returns a horizontal excerpt of the original
+file, which is a long way from postable: it still needs reframing, captions and
+text before it can go anywhere.
+
+\textbf{The interface treats both as the same thing.} One form, one set of
+controls, one card layout, one aspect ratio. A musician and a podcaster see an
+identical screen and get wildly different value from it. Any serious UI/UX work
+has to decide, early, whether hookcut is one product with a branch or two
+products sharing a pipeline --- and the honest answer today is the latter.
+
+% =====================================================================
+\section{What the project should accomplish}
+
+Doing this by hand is roughly seven steps and two to four hours per release:
+listen back and pick moments, cut them, build a vertical background, transcribe
+and sync the lyrics, add a hook text overlay, write per-platform captions,
+export each clip. hookcut's goal is to collapse that into about five minutes.
+
+The test is simple and unforgiving: \textbf{can the artist post the clip without
+opening another app?} Any step that sends them to CapCut is the product failing
+its own promise. Measured that way:
+
+\vspace{8pt}
+\begin{tabularx}{\linewidth}{@{}p{3.1cm} l X@{}}
+\toprule
+{\sffamily\footnotesize\color{muted}MANUAL STEP} &
+{\sffamily\footnotesize\color{muted}TODAY} &
+{\sffamily\footnotesize\color{muted}WHERE IT STANDS} \\
+\midrule
+Pick the moments &
+\stOK{Automated} &
+\small The LLM chooses, and is prompted to always include the chorus. But the
+choice is final --- nothing can be adjusted. \\[4pt]
+
+Cut the audio &
+\stOK{Automated} &
+\small Exact ffmpeg cuts at the chosen timestamps. \\[4pt]
+
+Vertical background &
+\stOK{Automated} &
+\small Songs only. One fixed look --- blurred art behind sharp art. No
+alternatives. \\[4pt]
+
+Sync the lyrics &
+\stOK{Automated} &
+\small Songs only. Karaoke-timed with a next-line preview. Whisper's word timing
+on sung audio is approximate, and there is no way to correct it. \\[4pt]
+
+Hook text overlay &
+\stNo{Suggested only} &
+\small Three variants written per clip, then printed as bullet points. Nothing
+renders them. \textbf{The artist goes to CapCut.} \\[4pt]
+
+Write captions &
+\stPart{Not usable} &
+\small TikTok and IG captions are produced, then displayed as plain text with no
+copy control. \\[4pt]
+
+Export and post &
+\stPart{Download only} &
+\small A download link per clip. No batch download, no share target. \\
+\bottomrule
+\end{tabularx}
+
+\vspace{10pt}
+Four of seven steps land. Three push the artist back out of the app --- and the
+one that matters most, the text overlay, is the single thing standing between
+``here are some clips'' and ``here is a post.''
+
+% =====================================================================
+\section{The promise gap}
+
+\begin{finding}{critcol}
+\chip{critbg}{critcol}{P0}\quad\ftitle{Text overlays are written but never rendered}
+\par\vspace{5pt}
+\code{analyze.py} returns three overlay variants per clip, each aimed at a
+different trigger --- relatability, curiosity, contrarian. The frontend prints
+them as bullets. No code path anywhere consumes them. \code{render\_video.py}
+builds an ASS subtitle file already, so the machinery to burn text into the
+frame exists and is running; the overlay simply is not wired into it.
+\fref{analyze.py:65 $\rightarrow$ page.tsx:210--214 \textbullet{} dead end}
+\end{finding}
+
+\begin{finding}{critcol}
+\chip{critbg}{critcol}{P0}\quad\ftitle{Captions cannot be copied}
+\par\vspace{5pt}
+Both captions render as bare paragraphs. The user selects text with a mouse and
+copies it by hand, twice per clip, five clips per run. A copy button is a
+trivial addition and removes ten manual interactions per job.
+\fref{page.tsx:218, page.tsx:223}
+\end{finding}
+
+\begin{finding}{warncol}
+\chip{warnbg}{warncol}{P1}\quad\ftitle{No batch export}
+\par\vspace{5pt}
+Five clips means five separate download clicks, each landing a file named
+\code{clip\_2\_the\_confession.mp4}. No zip, no naming the artist would
+recognise.
+\fref{page.tsx:226 \textbullet{} cut.py:136}
+\end{finding}
+
+% =====================================================================
+\section{Control and trust}
+
+\begin{finding}{critcol}
+\chip{critbg}{critcol}{P0}\quad\ftitle{One shot, no preview, no recourse}
+\par\vspace{5pt}
+Upload, wait several minutes, receive five finished clips. There is no point at
+which the artist sees the transcript, sees which moments were chosen, or can say
+``not that one.'' If the LLM picks badly, the only available action is
+\code{reset()} --- which clears everything and demands a fresh upload and a
+fresh transcription of the same file.
+\par\vspace{5pt}
+The pipeline has a natural seam the UI ignores: transcribe and analyse are
+comparatively fast and cheap; rendering is slow and expensive. Splitting there
+turns a gamble into a decision.
+\fref{page.tsx:78--84 \textbullet{} main.py:53--101}
+\end{finding}
+
+\begin{finding}{critcol}
+\chip{critbg}{critcol}{P0}\quad\ftitle{The evidence is fetched, then thrown away}
+\par\vspace{5pt}
+Every concept carries \code{source\_text} --- the actual transcript line the
+moment was chosen for. The frontend's own type declares it. \code{ClipCard}
+renders the angle name, the timestamps, the overlays and both captions, and
+silently drops \code{source\_text}.
+\par\vspace{5pt}
+This is the provenance signal. It is the one field that proves the clip came
+from the artist's real material rather than being invented --- the product's
+entire differentiator --- and it is the one field the card does not show.
+\fref{page.tsx:11 declared \textbullet{} page.tsx:194--231 never used}
+\end{finding}
+
+\begin{finding}{warncol}
+\chip{warnbg}{warncol}{P1}\quad\ftitle{Cut points are fixed, and clips are all-or-nothing}
+\par\vspace{5pt}
+The LLM's \code{mm:ss} range goes straight to ffmpeg. A clip that starts half a
+word early cannot be nudged, and a single bad clip cannot be re-rolled without
+re-running all five.
+\fref{cut.py:135--158}
+\end{finding}
+
+% =====================================================================
+\section{Progress theatre}
+
+\begin{finding}{critcol}
+\chip{critbg}{critcol}{P0}\quad\ftitle{The progress bar is a static rectangle}
+\par\vspace{5pt}
+It is hardcoded to \code{width: "60\%"} and given
+\code{animation: "pulse 1.5s infinite"}. There is no \code{pulse} keyframe
+anywhere in the repository --- and no CSS file in which to define one. So it
+renders as a motionless bar, stuck at 60\%, for the entire multi-minute run. It
+reads as a hung process.
+\fref{page.tsx:164--166 \textbullet{} no @keyframes in repo}
+\end{finding}
+
+\begin{finding}{critcol}
+\chip{critbg}{critcol}{P0}\quad\ftitle{Five known stages, none of them counted}
+\par\vspace{5pt}
+The backend reports exactly which stage it is in and the frontend has a label
+for each. Nothing tells the user it is stage three of five, how long they have
+been waiting, or that transcription alone can take minutes. During
+\code{cutting\_clips} --- the longest stage --- there is no per-clip count
+either, though the loop knows the index.
+\fref{page.tsx:24--32 \textbullet{} cut.py:135}
+\end{finding}
+
+\begin{finding}{warncol}
+\chip{warnbg}{warncol}{P1}\quad\ftitle{Uploads are silent}
+\par\vspace{5pt}
+An hour-long podcast is a large file. The submit handler uses \code{fetch},
+which reports no upload progress, so the button says ``Uploading\ldots'' and
+nothing else happens until the whole file has landed. Upload progress needs
+\code{XMLHttpRequest}.
+\fref{page.tsx:70}
+\end{finding}
+
+% =====================================================================
+\section{Three ways it hangs without saying so}
+
+These are ordinary bugs, but they are listed here because each one presents to
+the user as a frozen interface with no error --- the worst possible failure mode
+for a process that is \emph{supposed} to take minutes.
+
+\begin{finding}{critcol}
+\chip{critbg}{critcol}{P0}\quad\ftitle{A dead backend locks the button forever}
+\par\vspace{5pt}
+\code{handleSubmit} has no error handling. If the fetch rejects --- backend not
+running, connection refused --- the line that clears \code{submitting} never
+executes. The button stays disabled reading ``Uploading\ldots'' permanently,
+with no error shown. Only a page reload recovers it.
+\fref{page.tsx:57--76 \textbullet{} setSubmitting(false) at :72 unreachable on throw}
+\end{finding}
+
+\begin{finding}{critcol}
+\chip{critbg}{critcol}{P0}\quad\ftitle{A server restart produces an infinite spinner}
+\par\vspace{5pt}
+Jobs live in an in-memory dict. When the backend restarts, that dict is empty,
+and the poll endpoint answers with \code{\{"error": "job not found"\}} --- an
+object with \textbf{no \code{stage} field}. The frontend stores it, finds
+\code{stage} is neither \code{done} nor \code{error}, and so keeps rendering the
+in-progress view and keeps polling. Forever.
+\par\vspace{5pt}
+The README tells developers to run uvicorn with \code{-{}-reload}, so in normal
+development this fires on every file save.
+\fref{main.py:50, main.py:144 $\rightarrow$ page.tsx:48--53}
+\end{finding}
+
+\begin{finding}{warncol}
+\chip{warnbg}{warncol}{P1}\quad\ftitle{Failed polls throw into the void}
+\par\vspace{5pt}
+The polling callback is unguarded. A single failed request throws inside the
+interval, which keeps firing regardless, accumulating rejections that never
+reach the user.
+\fref{page.tsx:46--55}
+\end{finding}
+
+% =====================================================================
+\section{One form, two paths}
+
+\begin{finding}{warncol}
+\chip{warnbg}{warncol}{P1}\quad\ftitle{Podcast clips are forced into a vertical box}
+\par\vspace{5pt}
+Every clip card hardcodes \code{aspectRatio: "9/16"}. Song clips genuinely are
+$1080\times1920$, so they fit. Podcast clips are stream copies at the source
+aspect --- usually 16:9 --- and get letterboxed into a tall black frame with a
+slender strip of video in the middle.
+\fref{page.tsx:200 vs cut.py:75}
+\end{finding}
+
+\begin{finding}{warncol}
+\chip{warnbg}{warncol}{P1}\quad\ftitle{Controls that explain when they do not work}
+\par\vspace{5pt}
+The lyrics checkbox is labelled ``Burn in karaoke-style lyrics
+\emph{(audio-only sources)}'' and is always shown --- including when the user
+has just selected an mp4, where it does nothing. The cover-art upload has the
+same problem. The file type is known the moment it is chosen; the form could
+simply become the right form.
+\fref{page.tsx:106--114, page.tsx:150--153}
+\end{finding}
+
+\begin{finding}{accent}
+\chip{accentbg}{accent}{P2}\quad\ftitle{Invisible defaults}
+\par\vspace{5pt}
+Genre and mood are optional free-text that silently fall back to ``music'' and
+``moody''. A user leaving them blank has no idea a default was applied or what
+it was. Clip count is a number stepper for a range of 1--10, where a segmented
+control would take one click instead of several.
+\fref{page.tsx:64--65, page.tsx:138--148}
+\end{finding}
+
+% =====================================================================
+\section{There is no styling foundation}
+
+\begin{finding}{warncol}
+\chip{warnbg}{warncol}{P1}\quad\ftitle{Zero CSS files, and it constrains everything}
+\par\vspace{5pt}
+The repository contains no stylesheet of any kind --- no CSS file, no Tailwind,
+no CSS modules, no \code{next.config.js}, no PostCSS. All styling is inline
+React style objects. This is not a taste question; inline styles structurally
+cannot express several things the interface needs:
+\begin{itemize}
+\item \textbf{No pseudo-classes.} No hover, focus, active or disabled styling.
+      Buttons do not react to the cursor at all.
+\item \textbf{No media queries.} The layout is a fixed 720px column. The results
+      grid is the only responsive element in the app --- on a phone, the form
+      simply does not adapt.
+\item \textbf{No keyframes.} Which is why the progress animation is dead.
+\item \textbf{No focus-visible.} Keyboard navigation is invisible.
+\item \textbf{No tokens.} The same eight hex values are retyped throughout, and
+      the dark theme is hardcoded on the body element.
+\end{itemize}
+\vspace{3pt}
+Everything else in the P1 tier is cheaper to fix once this is fixed first.
+\fref{page.tsx:233--261 \textbullet{} layout.tsx:9 \textbullet{} no *.css in repo}
+\end{finding}
+
+% =====================================================================
+\section{Accessibility}
+
+\begin{finding}{warncol}
+\chip{warnbg}{warncol}{P1}\quad\ftitle{Stage changes are never announced}
+\par\vspace{5pt}
+The status region has no \code{aria-live}, so a screen-reader user gets no
+notification when the job moves from transcribing to analysing to done. On a
+process this long, that is the entire feedback channel missing.
+\fref{page.tsx:161--168}
+\end{finding}
+
+\begin{finding}{warncol}
+\chip{warnbg}{warncol}{P1}\quad\ftitle{The progress bar is not a progress bar}
+\par\vspace{5pt}
+It is two nested \code{div}s with no \code{role="progressbar"} and no value
+attributes --- invisible to assistive technology.
+\fref{page.tsx:164--166}
+\end{finding}
+
+\begin{finding}{accent}
+\chip{accentbg}{accent}{P2}\quad\ftitle{Contrast, at least, is fine}
+\par\vspace{5pt}
+Worth recording as a pass: the muted grey \code{\#9a9aa5} on both the page
+ground and the card surface clears WCAG AA comfortably. The palette is sound ---
+it is the interaction states that are missing, not the colours.
+\fref{page.tsx:255--261}
+\end{finding}
+
+% =====================================================================
+\section{State and continuity}
+
+\begin{finding}{warncol}
+\chip{warnbg}{warncol}{P1}\quad\ftitle{Refreshing the page abandons the job}
+\par\vspace{5pt}
+The job id lives only in component state --- not in the URL, not in storage. A
+refresh, an accidental navigation, or a closed tab loses all access to a job
+that is still running happily on the server. Putting the id in the URL makes the
+run survivable and shareable, and costs almost nothing.
+\fref{page.tsx:41}
+\end{finding}
+
+\begin{finding}{accent}
+\chip{accentbg}{accent}{P2}\quad\ftitle{No history, no cancel}
+\par\vspace{5pt}
+Past runs are unreachable even though their files are still on disk under
+\code{backend/jobs/}. A running job cannot be cancelled --- a mistaken upload
+occupies the machine until it finishes.
+\fref{main.py:43--50}
+\end{finding}
+
+% =====================================================================
+\section{What I would build first}
+
+Ordered by how much each one moves the product toward ``the artist posts without
+opening another app.'' The first three are the ones that change what hookcut
+\emph{is}; the rest make it feel finished.
+
+\begin{enumerate}
+\item \textbf{Split the flow at the review seam.}\\
+      \small\color{ink2}
+      Transcribe and analyse, then stop and show the artist what was chosen ---
+      transcript, moments, source lines. They approve, drop or adjust, and only
+      then does rendering start. Turns the current gamble into a decision, and
+      stops wasting minutes of encoding on clips nobody wanted.
+
+\item \textbf{Burn the chosen overlay into the clip.}\\
+      \small\color{ink2}
+      Let the artist pick one of the three suggested hooks; render it into the
+      frame. \code{render\_video.py} already writes and burns ASS subtitles, so
+      this is a new style and a headline event, not new infrastructure. This
+      single change is what closes the CapCut gap.
+
+\item \textbf{Make waiting honest, and make failure visible.}\\
+      \small\color{ink2}
+      Real stage-of-five progress with elapsed time and a per-clip count, plus
+      the three hang bugs fixed: guard the submit, guard the poll, and treat a
+      \code{stage}-less response as an error rather than as ``still working.''
+
+\item \textbf{Show the source line on every card.}\\
+      \small\color{ink2}
+      \code{source\_text} is already in the payload. Displaying it is a few
+      lines and it is the product's whole argument --- this really is your
+      material, here is the line it came from, here is where it sits in the
+      track.
+
+\item \textbf{Give the frontend a stylesheet.}\\
+      \small\color{ink2}
+      Tailwind or a tokenised \code{globals.css} --- either works. This unblocks
+      hover and focus states, real responsiveness, working animation and
+      keyboard visibility all at once, and every subsequent UI change gets
+      cheaper.
+
+\item \textbf{Let the form follow the file.}\\
+      \small\color{ink2}
+      On selection, branch: a song gets cover art and lyrics controls and a 9:16
+      preview; a podcast gets neither and a correct aspect ratio. Set the right
+      expectation about what comes out, per path.
+
+\item \textbf{Copy buttons, batch download, job id in the URL.}\\
+      \small\color{ink2}
+      Small, cheap, immediately felt --- the difference between a demo and a
+      tool someone uses weekly.
+\end{enumerate}
+
+\begin{callout}{If only one thing gets built}
+Items 1 and 2 together. Review-then-render plus a burned-in hook is the
+difference between hookcut producing \emph{clips} and hookcut producing
+\emph{posts} --- and everything else on this list is polish on top of whichever
+of those two the product turns out to be.
+\end{callout}
+
+% =====================================================================
+\section{Notes for later}
+
+Not UI/UX work, but they would bite during it, so they are recorded here rather
+than lost.
+
+\begin{itemize}
+\item \textbf{Confirm the model id resolves.} \code{analyze.py:102} calls
+      \code{gemini-3.6-flash}. If that name does not resolve on the account
+      being used, every job dies at the analysing stage --- worth a single check
+      before debugging the frontend, because the symptom would look like a UI
+      bug.
+\item \textbf{\code{/clips} serves the whole jobs directory.} The static mount
+      exposes not just the rendered clips but the original uploaded file and the
+      transcript, to anyone holding the job UUID. Harmless on localhost; a
+      blocker before any deployment.
+\item \textbf{Uploaded filenames go straight into a path.} \code{main.py:117}
+      joins the client-supplied filename without sanitising it.
+\item \textbf{The backend is explicitly single-user.} Its own docstring says to
+      swap the thread-per-request model for a real queue before multi-user use
+      --- worth honouring that note before any UI implies concurrency.
+\item \textbf{Local setup is missing two things.} Python is not installed on the
+      audited machine, only the Microsoft Store alias stub, and ffmpeg is not
+      installed at all. Node is fine. The frontend can be run and styled without
+      either, but nothing can be rendered end-to-end until both are in place.
+\end{itemize}
+
+\end{document}
