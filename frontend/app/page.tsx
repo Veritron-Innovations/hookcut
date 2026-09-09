@@ -521,10 +521,19 @@ function UploadForm(props: any) {
       </div>
 
       <label className="coverline">
-        Cover art — optional, falls back to your mp3&apos;s embedded art
-        <input type="file" accept="image/*"
+        {/* The native input stays in the DOM for keyboard and screen readers;
+            the styled span beside it is what people actually see. */}
+        <input type="file" accept="image/*" className="visually-hidden"
           onChange={(e) => setCoverImage(e.target.files?.[0] ?? null)} />
-        {coverImage && <span className="mono">{coverImage.name}</span>}
+        <span className="coverline__btn">
+          <ImageIcon />
+          {coverImage ? "Change cover art" : "Add cover art"}
+        </span>
+        <span className="coverline__text">
+          {coverImage
+            ? <span className="coverline__name mono">{coverImage.name}</span>
+            : "Optional — falls back to your mp3's embedded art"}
+        </span>
       </label>
     </form>
   );
@@ -864,6 +873,18 @@ function Check() {
 }
 
 
+
+function ImageIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="1.6" y="2.6" width="12.8" height="10.8" rx="2" stroke="currentColor"
+        strokeWidth="1.5" />
+      <circle cx="5.9" cy="6.4" r="1.15" fill="currentColor" />
+      <path d="M2.4 11.4l3.3-3a1.2 1.2 0 0 1 1.6 0l2.2 2 1.4-1.2a1.2 1.2 0 0 1 1.6.05l1.1 1.05"
+        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 function WaveIcon() {
   return (
