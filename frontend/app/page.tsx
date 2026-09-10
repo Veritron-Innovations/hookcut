@@ -1,8 +1,13 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import SnakeGame from "./SnakeGame";
+import TapSync from "./TapSync";
 
 const API_BASE = "http://localhost:8000";
+
+type Mode = "clips" | "lyric_video";
+type Aspect = "16:9" | "9:16" | "1:1";
 
 type Concept = {
   angle_name: string;
@@ -19,37 +24,89 @@ type JobState = {
   stage: string;
   results: Concept[] | null;
   error: string | null;
+  mode?: Mode;
+  progress?: { current: number; total: number } | null;
+  started_at?: number;
+  audio_url?: string | null;
 };
 
 const STAGE_LABELS: Record<string, string> = {
   queued: "Queued...",
-  transcribing: "Transcribing audio (this can take a minute)...",
+  transcribing: "Transcribing audio — this can take a minute...",
   analyzing: "Finding the best moments...",
   resolving_cover_art: "Preparing cover art...",
-  cutting_clips: "Rendering clips...",
+  cutting_clips: "Rendering...",
   done: "Done",
   error: "Something went wrong",
 };
 
+const TIPS = [
+  "Karaoke sync uses word-level timestamps pulled straight from your audio.",
+  "Pasted lyrics beat auto-transcription for Sheng/Swahili verses — Whisper isn't great at either yet.",
+  "Each clip targets a different angle — relatability, curiosity, or a controversial take.",
+  "The chorus almost always gets picked as one of the clips — it's usually the most quotable part.",
+  "Cover art comes straight from your file's embedded metadata if you don't upload your own.",
+  "Longer files take longer to transcribe, not to render — the actual clip cutting is fast.",
+];
+
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 export default function Home() {
+  const [mode, setMode] = useState<Mode>("clips");
   const [file, setFile] = useState<File | null>(null);
   const [coverImage, setCoverImage] = useState<File | null>(null);
   const [genre, setGenre] = useState("");
   const [mood, setMood] = useState("");
   const [numConcepts, setNumConcepts] = useState(5);
+  const [aspect, setAspect] = useState<Aspect>("16:9");
   const [lyrics, setLyrics] = useState(true);
+  const [lyricsText, setLyricsText] = useState("");
+  const [probingLyrics, setProbingLyrics] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobState | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [tipIndex, setTipIndex] = useState(0);
+  const [fixingSection, setFixingSection] = useState(false);
+  const [fixLinesText, setFixLinesText] = useState("");
+  const [tapping, setTapping] = useState(false);
+  const [patching, setPatching] = useState(false);
+  const [patchConceptIndex, setPatchConceptIndex] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tipRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef = useRef<number>(0);
+
+  const handleFileChange = async (selected: File | null) => {
+    setFile(selected);
+    setLyricsText("");
+    if (!selected) return;
+
+    setProbingLyrics(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", selected);
+      const res = await fetch(`${API_BASE}/api/embedded-lyrics`, { method: "POST", body: formData });
+      const data = await res.json();
+      if (data.lyrics) setLyricsText(data.lyrics);
+    } catch {
+      // silent - lyrics box just stays empty, user can paste manually
+    }
+    setProbingLyrics(false);
+  };
 
   const pollJob = (id: string) => {
     pollRef.current = setInterval(async () => {
       const res = await fetch(`${API_BASE}/api/jobs/${id}`);
       const data: JobState = await res.json();
       setJob(data);
+      setElapsed((Date.now() - startTimeRef.current) / 1000);
       if (data.stage === "done" || data.stage === "error") {
         if (pollRef.current) clearInterval(pollRef.current);
+        if (tipRef.current) clearInterval(tipRef.current);
       }
     }, 2000);
   };
@@ -61,128 +118,342 @@ export default function Home() {
     setSubmitting(true);
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("genre", genre || "music");
-    formData.append("mood", mood || "moody");
-    formData.append("num_concepts", String(numConcepts));
+    formData.append("mode", mode);
     formData.append("lyrics", String(lyrics));
+    if (lyricsText.trim()) formData.append("lyrics_text", lyricsText);
     if (coverImage) formData.append("cover_image", coverImage);
+
+    if (mode === "clips") {
+      formData.append("genre", genre || "music");
+      formData.append("mood", mood || "moody");
+      formData.append("num_concepts", String(numConcepts));
+    } else {
+      formData.append("aspect", aspect);
+    }
 
     const res = await fetch(`${API_BASE}/api/jobs`, { method: "POST", body: formData });
     const data = await res.json();
     setSubmitting(false);
     setJobId(data.job_id);
-    setJob({ stage: "queued", results: null, error: null });
+    setJob({ stage: "queued", results: [], error: null, mode });
+    startTimeRef.current = Date.now();
+    setElapsed(0);
+    setTipIndex(0);
     pollJob(data.job_id);
+    tipRef.current = setInterval(() => {
+      setTipIndex((i) => (i + 1) % TIPS.length);
+    }, 6000);
+  };
+
+  const handlePatchComplete = async (taps: number[]) => {
+    if (!jobId) return;
+    const lines = fixLinesText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+    setPatching(true);
+    await fetch(`${API_BASE}/api/jobs/${jobId}/patch-section`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lines,
+        taps,
+        ...(patchConceptIndex !== null ? { concept_index: patchConceptIndex } : {}),
+      }),
+    });
+    setPatching(false);
+    setTapping(false);
+    setFixingSection(false);
+    setFixLinesText("");
+    setPatchConceptIndex(null);
+
+    setJob((prev) => (prev ? { ...prev, stage: "cutting_clips" } : prev));
+    startTimeRef.current = Date.now();
+    setElapsed(0);
+    setTipIndex(0);
+    pollJob(jobId);
+    tipRef.current = setInterval(() => {
+      setTipIndex((i) => (i + 1) % TIPS.length);
+    }, 6000);
+  };
+
+  const startFixingSection = (conceptIndex: number | null) => {
+    setPatchConceptIndex(conceptIndex);
+    setFixingSection(true);
+    setTapping(false);
+    setFixLinesText("");
+  };
+
+  const cancelFixingSection = () => {
+    setFixingSection(false);
+    setTapping(false);
+    setFixLinesText("");
+    setPatchConceptIndex(null);
   };
 
   const reset = () => {
     if (pollRef.current) clearInterval(pollRef.current);
+    if (tipRef.current) clearInterval(tipRef.current);
     setJobId(null);
     setJob(null);
     setFile(null);
     setCoverImage(null);
+    setLyricsText("");
   };
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: "48px 24px" }}>
-      <h1 style={{ fontSize: 32, marginBottom: 4 }}>hookcut</h1>
-      <p style={{ color: "#9a9aa5", marginBottom: 32 }}>
-        Turn your song or podcast into ready-to-post short-form clips.
-      </p>
+    <main style={{ maxWidth: 860, margin: "0 auto", padding: "56px 24px 96px" }}>
+      <header style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 48 }}>
+        <img src="/icon-192.png" alt="" width={44} height={44} style={{ borderRadius: 12 }} />
+        <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 26, letterSpacing: "-0.02em" }}>
+          hookcut
+        </span>
+        <a href="/tap-sync" style={{ marginLeft: 12, padding: "8px 12px", borderRadius: 8, background: "transparent", border: "1px solid var(--border)", color: "var(--muted)", textDecoration: "none", fontSize: 13 }}>
+          Tap-sync demo
+        </a>
+      </header>
 
       {!jobId && (
-        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <label>
-            Audio or video file
-            <input
-              type="file"
-              accept="audio/*,video/*"
-              required
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              style={inputStyle}
-            />
-          </label>
+        <>
+          <h1 style={{ fontSize: 44, lineHeight: 1.1, marginBottom: 12, maxWidth: 600 }}>
+            Your song.{" "}
+            <span style={{ background: "var(--gradient-signature)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>
+              Their attention.
+            </span>
+          </h1>
+          <p style={{ color: "var(--muted)", fontSize: 17, marginBottom: 32, maxWidth: 480 }}>
+            Upload the real thing. We find the hook, cut the clip, and write the caption —
+            in the time it takes to make coffee.
+          </p>
 
-          <label>
-            Cover art (optional — falls back to embedded art if your mp3 has any)
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => setCoverImage(e.target.files?.[0] ?? null)}
-              style={inputStyle}
-            />
-          </label>
+          <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+            <ModeTab active={mode === "clips"} onClick={() => setMode("clips")}>
+              Short clips
+            </ModeTab>
+            <ModeTab active={mode === "lyric_video"} onClick={() => setMode("lyric_video")}>
+              Full lyric video
+            </ModeTab>
+          </div>
 
-          <label>
-            Genre
-            <input
-              type="text"
-              placeholder="e.g. afro rnb, true crime podcast"
-              value={genre}
-              onChange={(e) => setGenre(e.target.value)}
-              style={inputStyle}
-            />
-          </label>
+          <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 18, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 20, padding: 28 }}>
+            <Field label="Audio or video file">
+              <input
+                type="file"
+                accept="audio/*,video/*"
+                required
+                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+                style={inputStyle}
+              />
+            </Field>
 
-          <label>
-            Mood
-            <input
-              type="text"
-              placeholder="e.g. reflective, moody, upbeat"
-              value={mood}
-              onChange={(e) => setMood(e.target.value)}
-              style={inputStyle}
-            />
-          </label>
+            <Field
+              label="Lyrics"
+              hint={
+                probingLyrics
+                  ? "checking file for embedded lyrics..."
+                  : "shown on screen for karaoke sync — edit freely, especially for Sheng/Swahili where auto-transcription is less reliable"
+              }
+            >
+              <textarea
+                value={lyricsText}
+                onChange={(e) => setLyricsText(e.target.value)}
+                placeholder="Paste or edit lyrics here. Leave blank to let transcription handle it automatically."
+                rows={6}
+                style={{ ...inputStyle, fontFamily: "var(--font-mono)", resize: "vertical" }}
+              />
+            </Field>
 
-          <label>
-            Number of clips
-            <input
-              type="number"
-              min={1}
-              max={10}
-              value={numConcepts}
-              onChange={(e) => setNumConcepts(Number(e.target.value))}
-              style={inputStyle}
-            />
-          </label>
+            <Field label="Cover art" hint="optional — falls back to embedded art if your file has any">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setCoverImage(e.target.files?.[0] ?? null)}
+                style={inputStyle}
+              />
+            </Field>
 
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input type="checkbox" checked={lyrics} onChange={(e) => setLyrics(e.target.checked)} />
-            Burn in karaoke-style lyrics (audio-only sources)
-          </label>
+            {mode === "clips" ? (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+                  <Field label="Genre">
+                    <input
+                      type="text"
+                      placeholder="e.g. afro rnb"
+                      value={genre}
+                      onChange={(e) => setGenre(e.target.value)}
+                      style={inputStyle}
+                    />
+                  </Field>
+                  <Field label="Mood">
+                    <input
+                      type="text"
+                      placeholder="e.g. reflective"
+                      value={mood}
+                      onChange={(e) => setMood(e.target.value)}
+                      style={inputStyle}
+                    />
+                  </Field>
+                </div>
 
-          <button type="submit" disabled={submitting || !file} style={buttonStyle}>
-            {submitting ? "Uploading..." : "Generate clips"}
-          </button>
-        </form>
+                <Field label="Number of clips">
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={numConcepts}
+                    onChange={(e) => setNumConcepts(Number(e.target.value))}
+                    style={inputStyle}
+                  />
+                </Field>
+              </>
+            ) : (
+              <Field label="Aspect ratio">
+                <select
+                  value={aspect}
+                  onChange={(e) => setAspect(e.target.value as Aspect)}
+                  style={inputStyle}
+                >
+                  <option value="16:9">16:9 (landscape, classic YouTube)</option>
+                  <option value="9:16">9:16 (vertical, Reels/Shorts)</option>
+                  <option value="1:1">1:1 (square)</option>
+                </select>
+              </Field>
+            )}
+
+            <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: "var(--paper)" }}>
+              <input type="checkbox" checked={lyrics} onChange={(e) => setLyrics(e.target.checked)} />
+              Burn in karaoke-style lyrics (audio-only sources)
+            </label>
+
+            <button type="submit" disabled={submitting || !file} style={buttonStyle}>
+              {submitting ? "Uploading..." : mode === "clips" ? "Generate clips" : "Generate lyric video"}
+            </button>
+          </form>
+        </>
       )}
 
       {job && job.stage !== "done" && job.stage !== "error" && (
-        <div style={{ marginTop: 32 }}>
-          <p>{STAGE_LABELS[job.stage] ?? job.stage}</p>
-          <div style={{ height: 4, background: "#26262e", borderRadius: 2, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: "60%", background: "#6c5ce7", animation: "pulse 1.5s infinite" }} />
+        <div style={{ marginTop: 40 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+            <p style={{ fontSize: 15, color: "var(--paper)" }}>
+              {job.stage === "cutting_clips" && job.progress && job.progress.total > 0
+                ? `Rendering clip ${Math.min(job.progress.current + 1, job.progress.total)} of ${job.progress.total}...`
+                : STAGE_LABELS[job.stage] ?? job.stage}
+            </p>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--muted)" }}>
+              {formatElapsed(elapsed)}
+            </span>
           </div>
+          <div className="progress-track">
+            <div className="progress-sweep" />
+          </div>
+          <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 16, minHeight: 18 }}>
+            {TIPS[tipIndex]}
+          </p>
+          <div style={{ marginTop: 24, display: "flex", justifyContent: "center" }}>
+            <SnakeGame />
+          </div>
+          {job.mode !== "lyric_video" && job.results && job.results.length > 0 && (
+            <div style={{ marginTop: 32 }}>
+              <p style={{ ...labelStyle, marginBottom: 12 }}>
+                {job.results.length} clip{job.results.length > 1 ? "s" : ""} ready so far
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: 24 }}>
+                {job.results.map((concept, i) => (
+                  <ClipCard
+                    key={i}
+                    concept={concept}
+                    index={i}
+                    onFixClick={job.audio_url ? () => startFixingSection(i) : undefined}
+                    isFixActive={fixingSection && patchConceptIndex === i}
+                    audioUrl={job.audio_url ? `${API_BASE}${job.audio_url}` : undefined}
+                    fixLinesText={fixLinesText}
+                    setFixLinesText={setFixLinesText}
+                    tapping={tapping}
+                    setTapping={setTapping}
+                    patching={patching}
+                    onComplete={handlePatchComplete}
+                    onCancel={cancelFixingSection}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {job && job.stage === "error" && (
-        <div style={{ marginTop: 32, color: "#ff6b6b" }}>
-          <p>Error: {job.error}</p>
+        <div style={{ marginTop: 40 }}>
+          <p style={{ color: "var(--signal)", marginBottom: 16 }}>Error: {job.error}</p>
           <button onClick={reset} style={buttonStyle}>Try again</button>
         </div>
       )}
 
-      {job && job.stage === "done" && job.results && (
-        <div style={{ marginTop: 32 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-            <h2>{job.results.length} clips ready</h2>
+      {job && job.stage === "done" && job.results && job.mode === "lyric_video" && (
+        <div style={{ marginTop: 40 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
+            <h2 style={{ fontSize: 24 }}>Lyric video ready</h2>
             <button onClick={reset} style={buttonStyle}>Start another</button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 24 }}>
+          <div className="phone-frame" style={{ maxWidth: 640, margin: "0 auto" }}>
+            <video
+              src={`${API_BASE}${job.results[0].clip_url}`}
+              controls
+              style={{ width: "100%", background: "#000" }}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 12, maxWidth: 640, margin: "18px auto 0" }}>
+            <a
+              href={`${API_BASE}${job.results[0].clip_url}`}
+              download
+              style={{ ...buttonStyle, flex: 1, textAlign: "center", textDecoration: "none" }}
+            >
+              Download
+            </a>
+            {job.audio_url && !fixingSection && (
+              <button onClick={() => startFixingSection(null)} style={{ ...secondaryButtonStyle, flex: 1 }}>
+                Fix a section
+              </button>
+            )}
+          </div>
+          {fixingSection && job.audio_url && (
+            <div style={{ maxWidth: 640, margin: "18px auto 0" }}>
+              <FixSectionPanel
+                audioUrl={`${API_BASE}${job.audio_url}`}
+                fixLinesText={fixLinesText}
+                setFixLinesText={setFixLinesText}
+                tapping={tapping}
+                setTapping={setTapping}
+                patching={patching}
+                onComplete={handlePatchComplete}
+                onCancel={cancelFixingSection}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {job && job.stage === "done" && job.results && job.mode !== "lyric_video" && (
+        <div style={{ marginTop: 40 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
+            <h2 style={{ fontSize: 24 }}>{job.results.length} clips ready</h2>
+            <button onClick={reset} style={buttonStyle}>Start another</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: 24 }}>
             {job.results.map((concept, i) => (
-              <ClipCard key={i} concept={concept} />
+              <ClipCard
+                key={i}
+                concept={concept}
+                index={i}
+                onFixClick={job.audio_url ? () => startFixingSection(i) : undefined}
+                isFixActive={fixingSection && patchConceptIndex === i}
+                audioUrl={job.audio_url ? `${API_BASE}${job.audio_url}` : undefined}
+                fixLinesText={fixLinesText}
+                setFixLinesText={setFixLinesText}
+                tapping={tapping}
+                setTapping={setTapping}
+                patching={patching}
+                onComplete={handlePatchComplete}
+                onCancel={cancelFixingSection}
+              />
             ))}
           </div>
         </div>
@@ -191,17 +462,88 @@ export default function Home() {
   );
 }
 
-function ClipCard({ concept }: { concept: Concept }) {
+function ModeTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <div style={{ background: "#17171d", borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-      <video
-        src={`${API_BASE}${concept.clip_url}`}
-        controls
-        style={{ width: "100%", aspectRatio: "9/16", borderRadius: 8, background: "#000" }}
-      />
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        padding: "8px 16px",
+        borderRadius: 999,
+        border: active ? "1px solid transparent" : "1px solid var(--border)",
+        background: active ? "var(--gradient-signature)" : "transparent",
+        color: active ? "#0c0b12" : "var(--muted)",
+        fontFamily: "var(--font-display)",
+        fontWeight: 700,
+        fontSize: 14,
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: "block", fontSize: 13, color: "var(--muted)" }}>
+      {label}
+      {hint && <span style={{ color: "var(--muted)", fontWeight: 400 }}> — {hint}</span>}
+      {children}
+    </label>
+  );
+}
+
+function ClipCard({
+  concept,
+  onFixClick,
+  index,
+  isFixActive,
+  audioUrl,
+  fixLinesText,
+  setFixLinesText,
+  tapping,
+  setTapping,
+  patching,
+  onComplete,
+  onCancel,
+}: {
+  concept: Concept;
+  onFixClick?: () => void;
+  index?: number;
+  isFixActive?: boolean;
+  audioUrl?: string | undefined;
+  fixLinesText?: string;
+  setFixLinesText?: (v: string) => void;
+  tapping?: boolean;
+  setTapping?: (v: boolean) => void;
+  patching?: boolean;
+  onComplete?: (taps: number[]) => void;
+  onCancel?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  // Keep local open state in sync with parent-controlled active flag
+  useEffect(() => {
+    if (isFixActive) setOpen(true);
+    if (!isFixActive) setOpen(false);
+  }, [isFixActive]);
+
+  const panelVisible = Boolean(isFixActive) || open;
+
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 20, padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div className="phone-frame">
+        <video
+          src={`${API_BASE}${concept.clip_url}`}
+          controls
+          style={{ width: "100%", aspectRatio: "9/16", background: "#000" }}
+        />
+      </div>
+
       <div>
-        <strong>{concept.angle_name}</strong>
-        <p style={{ fontSize: 13, color: "#9a9aa5" }}>
+        <strong style={{ fontFamily: "var(--font-display)", fontSize: 17 }}>{concept.angle_name}</strong>
+        <p style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--cue)", marginTop: 4 }}>
           {concept.start_timestamp} – {concept.end_timestamp}
         </p>
       </div>
@@ -209,23 +551,120 @@ function ClipCard({ concept }: { concept: Concept }) {
       <div>
         <p style={labelStyle}>Text overlay options</p>
         {concept.text_overlay_options.map((opt, i) => (
-          <p key={i} style={{ fontSize: 14, margin: "4px 0" }}>• {opt}</p>
+          <p key={i} style={{ fontSize: 14, margin: "4px 0", color: "var(--paper)" }}>• {opt}</p>
         ))}
       </div>
 
       <div>
         <p style={labelStyle}>TikTok caption</p>
-        <p style={{ fontSize: 14 }}>{concept.tiktok_caption}</p>
+        <p style={{ fontSize: 14, color: "var(--paper)" }}>{concept.tiktok_caption}</p>
       </div>
 
       <div>
         <p style={labelStyle}>IG caption</p>
-        <p style={{ fontSize: 14 }}>{concept.ig_caption}</p>
+        <p style={{ fontSize: 14, color: "var(--paper)" }}>{concept.ig_caption}</p>
       </div>
 
-      <a href={`${API_BASE}${concept.clip_url}`} download style={{ ...buttonStyle, textAlign: "center", textDecoration: "none" }}>
-        Download
-      </a>
+      <div style={{ display: "flex", gap: 8 }}>
+        <a href={`${API_BASE}${concept.clip_url}`} download style={{ ...buttonStyle, flex: 1, textAlign: "center", textDecoration: "none", display: "block" }}>
+          Download
+        </a>
+        {onFixClick && (
+          <button
+            onClick={() => {
+              try {
+                onFixClick?.();
+              } finally {
+                // ensure the panel appears immediately even if parent state
+                // updates are batched or delayed
+                setOpen(true);
+              }
+            }}
+            style={{ ...secondaryButtonStyle, flex: 1 }}
+          >
+            Fix lyrics
+          </button>
+        )}
+      </div>
+
+      {panelVisible && audioUrl && setFixLinesText && onComplete && onCancel && (
+        <div style={{ marginTop: 12 }}>
+          <p style={{ ...labelStyle, marginBottom: 8 }}>{`Fixing: ${concept.angle_name}`}</p>
+          <FixSectionPanel
+            audioUrl={audioUrl}
+            fixLinesText={fixLinesText ?? ""}
+            setFixLinesText={setFixLinesText}
+            tapping={!!tapping}
+            setTapping={setTapping!}
+            patching={!!patching}
+            onComplete={onComplete}
+            onCancel={onCancel}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FixSectionPanel({
+  audioUrl,
+  fixLinesText,
+  setFixLinesText,
+  tapping,
+  setTapping,
+  patching,
+  onComplete,
+  onCancel,
+}: {
+  audioUrl: string;
+  fixLinesText: string;
+  setFixLinesText: (v: string) => void;
+  tapping: boolean;
+  setTapping: (v: boolean) => void;
+  patching: boolean;
+  onComplete: (taps: number[]) => void;
+  onCancel: () => void;
+}) {
+  const lines = fixLinesText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  if (tapping) {
+    return (
+      <TapSync
+        audioUrl={audioUrl}
+        lines={lines}
+        onComplete={onComplete}
+        onCancel={() => setTapping(false)}
+      />
+    );
+  }
+
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 20, padding: 24, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div>
+        <strong style={{ fontFamily: "var(--font-display)", fontSize: 16 }}>Paste the lines to fix</strong>
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 4 }}>
+          One lyric line per row, in the order they're sung — e.g. just the chorus.
+        </p>
+      </div>
+      <textarea
+        value={fixLinesText}
+        onChange={(e) => setFixLinesText(e.target.value)}
+        placeholder={"Kiburi ni mzigo\nWeka chini usimame\n..."}
+        rows={5}
+        style={{ ...inputStyle, fontFamily: "var(--font-mono)", resize: "vertical" }}
+      />
+      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+        <button onClick={onCancel} style={secondaryButtonStyle}>
+          Cancel
+        </button>
+        <button
+          onClick={() => setTapping(true)}
+          disabled={lines.length === 0 || patching}
+          style={{ ...buttonStyle, opacity: lines.length === 0 || patching ? 0.4 : 1 }}
+        >
+          {patching ? "Applying fix..." : `Start tapping (${lines.length} lines)`}
+        </button>
+      </div>
     </div>
   );
 }
@@ -235,27 +674,43 @@ const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "10px 12px",
   marginTop: 6,
-  background: "#17171d",
-  border: "1px solid #2a2a33",
-  borderRadius: 8,
-  color: "#f2f2f5",
+  background: "var(--surface-2)",
+  border: "1px solid var(--border)",
+  borderRadius: 10,
+  color: "var(--paper)",
+  fontSize: 14,
   boxSizing: "border-box",
 };
 
 const buttonStyle: React.CSSProperties = {
-  padding: "10px 20px",
-  background: "#6c5ce7",
+  padding: "12px 20px",
+  background: "var(--gradient-signature)",
   border: "none",
-  borderRadius: 8,
-  color: "white",
-  fontWeight: 600,
+  borderRadius: 10,
+  color: "#0c0b12",
+  fontWeight: 700,
+  fontFamily: "var(--font-display)",
   cursor: "pointer",
+  fontSize: 15,
+};
+
+const secondaryButtonStyle: React.CSSProperties = {
+  padding: "12px 20px",
+  background: "transparent",
+  border: "1px solid var(--border)",
+  borderRadius: 10,
+  color: "var(--paper)",
+  fontWeight: 600,
+  fontFamily: "var(--font-body)",
+  cursor: "pointer",
+  fontSize: 15,
 };
 
 const labelStyle: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: 11,
   textTransform: "uppercase",
-  letterSpacing: 0.5,
-  color: "#9a9aa5",
+  letterSpacing: 0.6,
+  color: "var(--muted)",
   marginBottom: 4,
+  fontWeight: 600,
 };
