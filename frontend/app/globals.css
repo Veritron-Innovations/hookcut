@@ -1,0 +1,92 @@
+@import url('https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+
+:root {
+  --ink: #0c0b12;
+  --surface: #17151f;
+  --surface-2: #1f1c29;
+  --signal: #ff3d7f;
+  --cue: #ffc53d;
+  --paper: #f5f3f7;
+  --muted: #8b8796;
+  --border: #2a2733;
+
+  --font-display: 'Clash Display', 'Satoshi', system-ui, sans-serif;
+  --font-body: 'Satoshi', system-ui, sans-serif;
+  --font-mono: 'Space Mono', monospace;
+
+  --gradient-signature: linear-gradient(90deg, var(--cue), var(--signal));
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-body);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background: var(--signal);
+  color: var(--paper);
+}
+
+input,
+button {
+  font-family: var(--font-body);
+}
+
+.progress-track {
+  position: relative;
+  height: 6px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-sweep {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: var(--gradient-signature);
+  border-radius: 999px;
+  animation: sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
+.phone-frame {
+  background: #000;
+  border: 3px solid var(--surface-2);
+  border-radius: 28px;
+  padding: 8px;
+}
+
+.phone-frame video {
+  border-radius: 20px;
+  display: block;
+}

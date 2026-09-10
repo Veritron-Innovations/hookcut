@@ -15,3 +15,6 @@ mutagen
 
 # Image compositing for vertical video background
 Pillow
+
+# Forced alignment (experimental) - audio feature extraction + DTW
+soundfile

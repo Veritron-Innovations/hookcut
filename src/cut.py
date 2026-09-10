@@ -4,16 +4,49 @@ cut.py
 Cuts real clips out of the source audio/video at the timestamps chosen by
 analyze.py.
 
-- Video sources (podcasts): stream-copy cut (-c copy) for near-instant cuts.
+- Video sources (podcasts, music videos): stream-copy cut (-c copy) for a
+  fast initial trim, then always center-cropped to vertical 9:16 (regardless
+  of the source's original aspect ratio) via
+  render_video.reformat_and_caption_video_clip - lyric/caption subtitles are
+  burned in during that same pass if lyrics_enabled (this pass re-encodes
+  either way, since cropping and subtitle burn-in both modify pixels - only
+  the initial stream-copy trim stays fast).
 - Audio-only sources (songs): no video exists to cut, so instead we render a
   new 9:16 vertical video per clip - album art background + optional
   karaoke-synced lyrics - via render_video.py.
 """
 
 import subprocess
+import re
 from pathlib import Path
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg"}
+
+# Whitelist, not blacklist: this filename doesn't just need to survive the
+# OS filesystem (Windows forbids < > : " / \ | ? *) - it also gets embedded
+# directly into ffmpeg's own filter-string syntax (subtitles='path'), which
+# breaks on a different set of characters entirely (an apostrophe in the
+# name prematurely closes that quoted string and corrupts the path ffmpeg
+# tries to open). Rather than chase individual unsafe characters across two
+# unrelated parsers one at a time, only ever allow characters known to be
+# safe in both: letters, digits, underscore, hyphen.
+_SAFE_CHARS_RE = re.compile(r"[^a-zA-Z0-9_-]+")
+
+
+def safe_filename(name: str, max_len: int = 40) -> str:
+    """
+    Turn arbitrary text (e.g. an LLM-generated concept name) into a string
+    safe to use in a filename AND inside an ffmpeg filter argument, on
+    Windows, macOS, and Linux alike. Whitelists a small safe character set
+    rather than blacklisting known-bad ones, since this name flows into
+    ffmpeg filter strings (e.g. the subtitles filter) where the unsafe
+    character set is different from - and stricter than - the OS
+    filesystem's own rules.
+    """
+    cleaned = name.lower().replace(" ", "_")
+    cleaned = _SAFE_CHARS_RE.sub("_", cleaned)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned[:max_len] or "clip"
 
 
 def is_audio_only(path: str) -> bool:
@@ -109,6 +142,61 @@ def cut_audio_segment(input_path: str, start: str, end: str, output_path: str) -
     return output_path
 
 
+def recut_one_concept(
+    input_path: str,
+    concept: dict,
+    output_dir: str,
+    cover_path: str | None,
+    segments: list | None,
+    precomputed_lines: list,
+    safe_name: str,
+) -> str:
+    """
+    Re-render a SINGLE clip with precomputed (manually patched) lyric
+    lines - used by the tap-sync "fix a section" flow, where only one
+    clip's timing needs correcting, not the whole batch. Mirrors the
+    per-concept logic inside cut_all_concepts, but takes lines directly
+    instead of computing alignment from lyrics_text.
+    """
+    from render_video import make_vertical_clip, reformat_and_caption_video_clip
+
+    start = concept["start_timestamp"]
+    end = concept["end_timestamp"]
+    audio_source = is_audio_only(input_path)
+
+    if audio_source:
+        audio_seg_path = f"{output_dir}/clip_{safe_name}_audio.m4a"
+        cut_audio_segment(input_path, start, end, audio_seg_path)
+
+        out_path = f"{output_dir}/clip_{safe_name}.mp4"
+        make_vertical_clip(
+            audio_clip_path=audio_seg_path,
+            cover_path=cover_path,
+            segments=segments or [],
+            clip_start=timestamp_to_seconds(start),
+            clip_end=timestamp_to_seconds(end),
+            output_path=out_path,
+            lyrics_enabled=True,
+            precomputed_lines=precomputed_lines,
+        )
+    else:
+        raw_path = f"{output_dir}/clip_{safe_name}_raw.mp4"
+        cut_clip(input_path, start, end, raw_path)
+
+        out_path = f"{output_dir}/clip_{safe_name}.mp4"
+        reformat_and_caption_video_clip(
+            video_clip_path=raw_path,
+            segments=segments or [],
+            clip_start=timestamp_to_seconds(start),
+            clip_end=timestamp_to_seconds(end),
+            output_path=out_path,
+            lyrics_enabled=True,
+            precomputed_lines=precomputed_lines,
+        )
+
+    return out_path
+
+
 def cut_all_concepts(
     input_path: str,
     brief: dict,
@@ -116,24 +204,43 @@ def cut_all_concepts(
     cover_path: str | None = None,
     segments: list | None = None,
     lyrics_enabled: bool = True,
+    lyrics_text: str | None = None,
+    on_clip_done=None,
 ) -> list:
     """
     Produce a final clip for every concept in a brief (as produced by
     analyze.py).
 
-    For video sources: stream-copy cut of the original video.
+    For video sources: stream-copy cut, then always center-cropped to
+    vertical 9:16 (regardless of the source's original aspect ratio),
+    with lyric/caption subtitles burned in during that same pass if
+    lyrics_enabled.
     For audio-only sources: renders a 9:16 vertical video with album art
     background and optional karaoke-synced lyrics.
 
+    lyrics_text, if provided, is user-corrected lyrics aligned to real
+    audio timing instead of trusting Whisper's own transcription - see
+    lyric_align.py.
+
+    on_clip_done, if provided, is called as (index, total, concept,
+    output_path) right after each individual clip finishes rendering - lets
+    a caller (e.g. the web backend) surface progress/results incrementally
+    instead of only after every clip is done.
+
     Returns list of output file paths.
     """
-    from render_video import make_vertical_clip
+    from render_video import make_vertical_clip, reformat_and_caption_video_clip, get_audio_duration
 
     audio_source = is_audio_only(input_path)
     output_paths = []
+    total = len(brief["concepts"])
+
+    total_duration = None
+    if lyrics_text:
+        total_duration = get_audio_duration(input_path)
 
     for i, concept in enumerate(brief["concepts"]):
-        safe_name = concept["angle_name"].lower().replace(" ", "_")[:40]
+        safe_name = safe_filename(concept["angle_name"])
         start = concept["start_timestamp"]
         end = concept["end_timestamp"]
 
@@ -150,13 +257,30 @@ def cut_all_concepts(
                 clip_end=timestamp_to_seconds(end),
                 output_path=out_path,
                 lyrics_enabled=lyrics_enabled,
+                lyrics_text=lyrics_text,
+                total_duration=total_duration,
             )
         else:
+            raw_path = f"{output_dir}/clip_{i}_{safe_name}_raw.mp4"
+            cut_clip(input_path, start, end, raw_path)
+
             out_path = f"{output_dir}/clip_{i}_{safe_name}.mp4"
-            cut_clip(input_path, start, end, out_path)
+            reformat_and_caption_video_clip(
+                video_clip_path=raw_path,
+                segments=segments or [],
+                clip_start=timestamp_to_seconds(start),
+                clip_end=timestamp_to_seconds(end),
+                output_path=out_path,
+                lyrics_text=lyrics_text,
+                total_duration=total_duration,
+                lyrics_enabled=lyrics_enabled,
+            )
 
         output_paths.append(out_path)
         print(f"Cut: {out_path} ({start} - {end})")
+
+        if on_clip_done:
+            on_clip_done(i, total, concept, out_path)
 
     return output_paths
 

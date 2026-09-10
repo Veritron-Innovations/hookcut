@@ -37,8 +37,20 @@ TASK:
    Only reference text that actually appears in the transcript.
 
 2. CUT POINTS
-   For each selected moment, pick a timestamp range from the ACTUAL segment \
-   timestamps provided (do not invent timestamps). Keep clips 15-30 seconds.
+   Pick cut points based on the CONTENT first, not a fixed duration:
+   - Start at a natural beginning - the first word of a complete phrase,
+     line, or thought, right where the hook's setup begins. Don't start
+     mid-sentence.
+   - End at a natural landing point - the end of a complete line, thought,
+     or punchline, even if that lands a few seconds outside the target
+     range below. A clip that cuts off mid-thought to hit a duration
+     target is worse than one that's a little longer or shorter but lands
+     cleanly.
+   - Target range: aim for roughly 15-30 seconds as a guideline, not a
+     hard limit. Going a little under or over is fine if that's what the
+     natural content boundary requires - never sacrifice a clean start/end
+     point just to fit the range exactly.
+   Use the ACTUAL segment timestamps provided - do not invent timestamps.
 
 3. TEXT OVERLAY OPTIONS
    For each moment, write 3 on-screen text hook variants (max 12 words each), \
@@ -71,7 +83,7 @@ Return STRICT JSON only, no prose outside the JSON, in this shape:
 """
 
 
-def analyze(transcript: dict, genre: str, mood: str, num_concepts: int = 5) -> dict:
+def analyze(transcript: dict, genre: str, mood: str, num_concepts: int = 5, corrected_lines: list | None = None) -> dict:
     """
     Send a transcript to the LLM and get back structured short-form concepts.
 
@@ -80,14 +92,28 @@ def analyze(transcript: dict, genre: str, mood: str, num_concepts: int = 5) -> d
         genre: e.g. "indie folk", "true crime podcast"
         mood: e.g. "Late-night / Moody / Narrative"
         num_concepts: how many angles to generate
+        corrected_lines: optional - aligned lyric lines from lyric_align.py
+            (accurate words, real audio timing). When provided, these are
+            used INSTEAD of Whisper's raw transcript for hook-finding -
+            important for Sheng/Swahili content where Whisper's own
+            transcription is unreliable enough that Gemini can't actually
+            find the real hook/chorus in it. Picked timestamps then line up
+            with what actually gets rendered later, since both use the same
+            corrected data.
 
     Returns:
         dict with "concepts" list matching the schema above
     """
-    segments_text = "\n".join(
-        f"[{s['start']:.1f}s - {s['end']:.1f}s] {s['text']}"
-        for s in transcript["segments"]
-    )
+    if corrected_lines:
+        segments_text = "\n".join(
+            f"[{l['start']:.1f}s - {l['end']:.1f}s] {' '.join(w['word'] for w in l['words'])}"
+            for l in corrected_lines
+        )
+    else:
+        segments_text = "\n".join(
+            f"[{s['start']:.1f}s - {s['end']:.1f}s] {s['text']}"
+            for s in transcript["segments"]
+        )
 
     user_prompt = f"""
 Genre: {genre}
@@ -131,8 +157,8 @@ if __name__ == "__main__":
     result = analyze(transcript, genre, mood, num_concepts)
 
     out_path = transcript_path.replace("_transcript.json", "_brief.json")
-    with open(out_path, "w") as f:
-        json.dump(result, f, indent=2)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
 
     print(f"Saved brief to {out_path}")
     print(json.dumps(result, indent=2))

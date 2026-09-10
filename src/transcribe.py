@@ -56,7 +56,7 @@ def transcribe(input_path: str, model_size: str = "base") -> dict:
 
 def save_transcript(transcript: dict, output_path: str) -> None:
     """Save transcript dict to a JSON file."""
-    Path(output_path).write_text(json.dumps(transcript, indent=2))
+    Path(output_path).write_text(json.dumps(transcript, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def format_timestamp(seconds: float) -> str:
