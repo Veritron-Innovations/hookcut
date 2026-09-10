@@ -275,6 +275,7 @@ def reformat_and_caption_video_clip(
     height: int = CANVAS_H,
     fit_mode: str = "letterbox",
     bar_color: str = "black",
+    precomputed_lines: list | None = None,
 ) -> str:
     """
     Reformat an existing video clip to vertical (default 1080x1920), and
@@ -294,6 +295,10 @@ def reformat_and_caption_video_clip(
     - "crop": scales up and crops the sides off to fill the whole vertical
       frame - no bars, but anything not centered in the original shot gets
       cut off.
+
+    precomputed_lines, if provided (e.g. manually tap-synced lines merged
+    with auto-alignment via tap_sync.merge_manual_and_auto_lines), is used
+    directly instead of computing alignment here.
 
     Necessarily re-encodes the video stream (both the reframe and any
     subtitle burn-in modify pixels); audio is copied through unchanged.
@@ -321,9 +326,9 @@ def reformat_and_caption_video_clip(
         raise ValueError(f"Unknown fit_mode '{fit_mode}' - use 'letterbox' or 'crop'")
 
     ass_path = None
-    if lyrics_enabled and segments:
-        lines_override = None
-        if lyrics_text:
+    if lyrics_enabled and (segments or precomputed_lines is not None):
+        lines_override = precomputed_lines
+        if lines_override is None and lyrics_text:
             from lyric_align import align_lyrics_to_audio
             lines_override = align_lyrics_to_audio(lyrics_text, segments, total_duration)
 
@@ -365,6 +370,7 @@ def make_vertical_clip(
     lyrics_enabled: bool = True,
     lyrics_text: str | None = None,
     total_duration: float | None = None,
+    precomputed_lines: list | None = None,
 ) -> str:
     """
     Short-clip flow (9:16): build background from cover art, optionally
@@ -378,6 +384,10 @@ def make_vertical_clip(
     this clip's range gets filtered out of it, and needs the real total
     duration to avoid badly compressing lines into whatever narrow span
     Whisper happened to detect words in.
+
+    precomputed_lines, if provided (e.g. manually tap-synced lines merged
+    with auto-alignment via tap_sync.merge_manual_and_auto_lines), is used
+    directly instead of computing alignment here.
     """
     work_dir = str(Path(output_path).parent)
     stem = Path(output_path).stem
@@ -385,9 +395,9 @@ def make_vertical_clip(
     bg_path = build_background(cover_path, f"{work_dir}/{stem}_bg.jpg", CANVAS_W, CANVAS_H)
 
     ass_path = None
-    if lyrics_enabled and segments:
-        lines_override = None
-        if lyrics_text:
+    if lyrics_enabled and (segments or precomputed_lines is not None):
+        lines_override = precomputed_lines
+        if lines_override is None and lyrics_text:
             from lyric_align import align_lyrics_to_audio
             lines_override = align_lyrics_to_audio(lyrics_text, segments, total_duration)
         ass_path = build_ass_subtitles(

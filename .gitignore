@@ -18,6 +18,7 @@ output/*
 *.mov
 *.m4a
 *.ass
+*.zip
 
 # --- Backend job artifacts (generated per-run, not source) ---
 backend/jobs/*
@@ -38,8 +39,5 @@ frontend/.turbo/
 Thumbs.db
 .vscode/
 .idea/
-<<<<<<< Updated upstream
 frontend/tsconfig.tsbuildinfo
 frontend/next-env.d.ts
-=======
->>>>>>> Stashed changes

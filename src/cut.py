@@ -142,6 +142,61 @@ def cut_audio_segment(input_path: str, start: str, end: str, output_path: str) -
     return output_path
 
 
+def recut_one_concept(
+    input_path: str,
+    concept: dict,
+    output_dir: str,
+    cover_path: str | None,
+    segments: list | None,
+    precomputed_lines: list,
+    safe_name: str,
+) -> str:
+    """
+    Re-render a SINGLE clip with precomputed (manually patched) lyric
+    lines - used by the tap-sync "fix a section" flow, where only one
+    clip's timing needs correcting, not the whole batch. Mirrors the
+    per-concept logic inside cut_all_concepts, but takes lines directly
+    instead of computing alignment from lyrics_text.
+    """
+    from render_video import make_vertical_clip, reformat_and_caption_video_clip
+
+    start = concept["start_timestamp"]
+    end = concept["end_timestamp"]
+    audio_source = is_audio_only(input_path)
+
+    if audio_source:
+        audio_seg_path = f"{output_dir}/clip_{safe_name}_audio.m4a"
+        cut_audio_segment(input_path, start, end, audio_seg_path)
+
+        out_path = f"{output_dir}/clip_{safe_name}.mp4"
+        make_vertical_clip(
+            audio_clip_path=audio_seg_path,
+            cover_path=cover_path,
+            segments=segments or [],
+            clip_start=timestamp_to_seconds(start),
+            clip_end=timestamp_to_seconds(end),
+            output_path=out_path,
+            lyrics_enabled=True,
+            precomputed_lines=precomputed_lines,
+        )
+    else:
+        raw_path = f"{output_dir}/clip_{safe_name}_raw.mp4"
+        cut_clip(input_path, start, end, raw_path)
+
+        out_path = f"{output_dir}/clip_{safe_name}.mp4"
+        reformat_and_caption_video_clip(
+            video_clip_path=raw_path,
+            segments=segments or [],
+            clip_start=timestamp_to_seconds(start),
+            clip_end=timestamp_to_seconds(end),
+            output_path=out_path,
+            lyrics_enabled=True,
+            precomputed_lines=precomputed_lines,
+        )
+
+    return out_path
+
+
 def cut_all_concepts(
     input_path: str,
     brief: dict,

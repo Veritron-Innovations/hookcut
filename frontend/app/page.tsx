@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import SnakeGame from "./SnakeGame";
+import TapSync from "./TapSync";
 
 const API_BASE = "http://localhost:8000";
 
@@ -26,6 +27,7 @@ type JobState = {
   mode?: Mode;
   progress?: { current: number; total: number } | null;
   started_at?: number;
+  audio_url?: string | null;
 };
 
 const STAGE_LABELS: Record<string, string> = {
@@ -69,6 +71,11 @@ export default function Home() {
   const [submitting, setSubmitting] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [tipIndex, setTipIndex] = useState(0);
+  const [fixingSection, setFixingSection] = useState(false);
+  const [fixLinesText, setFixLinesText] = useState("");
+  const [tapping, setTapping] = useState(false);
+  const [patching, setPatching] = useState(false);
+  const [patchConceptIndex, setPatchConceptIndex] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tipRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(0);
@@ -136,6 +143,50 @@ export default function Home() {
     tipRef.current = setInterval(() => {
       setTipIndex((i) => (i + 1) % TIPS.length);
     }, 6000);
+  };
+
+  const handlePatchComplete = async (taps: number[]) => {
+    if (!jobId) return;
+    const lines = fixLinesText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+    setPatching(true);
+    await fetch(`${API_BASE}/api/jobs/${jobId}/patch-section`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lines,
+        taps,
+        ...(patchConceptIndex !== null ? { concept_index: patchConceptIndex } : {}),
+      }),
+    });
+    setPatching(false);
+    setTapping(false);
+    setFixingSection(false);
+    setFixLinesText("");
+    setPatchConceptIndex(null);
+
+    setJob((prev) => (prev ? { ...prev, stage: "cutting_clips" } : prev));
+    startTimeRef.current = Date.now();
+    setElapsed(0);
+    setTipIndex(0);
+    pollJob(jobId);
+    tipRef.current = setInterval(() => {
+      setTipIndex((i) => (i + 1) % TIPS.length);
+    }, 6000);
+  };
+
+  const startFixingSection = (conceptIndex: number | null) => {
+    setPatchConceptIndex(conceptIndex);
+    setFixingSection(true);
+    setTapping(false);
+    setFixLinesText("");
+  };
+
+  const cancelFixingSection = () => {
+    setFixingSection(false);
+    setTapping(false);
+    setFixLinesText("");
+    setPatchConceptIndex(null);
   };
 
   const reset = () => {
@@ -307,7 +358,21 @@ export default function Home() {
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: 24 }}>
                 {job.results.map((concept, i) => (
-                  <ClipCard key={i} concept={concept} />
+                  <ClipCard
+                    key={i}
+                    concept={concept}
+                    index={i}
+                    onFixClick={job.audio_url ? () => startFixingSection(i) : undefined}
+                    isFixActive={fixingSection && patchConceptIndex === i}
+                    audioUrl={job.audio_url ? `${API_BASE}${job.audio_url}` : undefined}
+                    fixLinesText={fixLinesText}
+                    setFixLinesText={setFixLinesText}
+                    tapping={tapping}
+                    setTapping={setTapping}
+                    patching={patching}
+                    onComplete={handlePatchComplete}
+                    onCancel={cancelFixingSection}
+                  />
                 ))}
               </div>
             </div>
@@ -335,13 +400,34 @@ export default function Home() {
               style={{ width: "100%", background: "#000" }}
             />
           </div>
-          <a
-            href={`${API_BASE}${job.results[0].clip_url}`}
-            download
-            style={{ ...buttonStyle, display: "block", textAlign: "center", textDecoration: "none", maxWidth: 640, margin: "18px auto 0" }}
-          >
-            Download
-          </a>
+          <div style={{ display: "flex", gap: 12, maxWidth: 640, margin: "18px auto 0" }}>
+            <a
+              href={`${API_BASE}${job.results[0].clip_url}`}
+              download
+              style={{ ...buttonStyle, flex: 1, textAlign: "center", textDecoration: "none" }}
+            >
+              Download
+            </a>
+            {job.audio_url && !fixingSection && (
+              <button onClick={() => startFixingSection(null)} style={{ ...secondaryButtonStyle, flex: 1 }}>
+                Fix a section
+              </button>
+            )}
+          </div>
+          {fixingSection && job.audio_url && (
+            <div style={{ maxWidth: 640, margin: "18px auto 0" }}>
+              <FixSectionPanel
+                audioUrl={`${API_BASE}${job.audio_url}`}
+                fixLinesText={fixLinesText}
+                setFixLinesText={setFixLinesText}
+                tapping={tapping}
+                setTapping={setTapping}
+                patching={patching}
+                onComplete={handlePatchComplete}
+                onCancel={cancelFixingSection}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -353,7 +439,21 @@ export default function Home() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: 24 }}>
             {job.results.map((concept, i) => (
-              <ClipCard key={i} concept={concept} />
+              <ClipCard
+                key={i}
+                concept={concept}
+                index={i}
+                onFixClick={job.audio_url ? () => startFixingSection(i) : undefined}
+                isFixActive={fixingSection && patchConceptIndex === i}
+                audioUrl={job.audio_url ? `${API_BASE}${job.audio_url}` : undefined}
+                fixLinesText={fixLinesText}
+                setFixLinesText={setFixLinesText}
+                tapping={tapping}
+                setTapping={setTapping}
+                patching={patching}
+                onComplete={handlePatchComplete}
+                onCancel={cancelFixingSection}
+              />
             ))}
           </div>
         </div>
@@ -394,7 +494,43 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-function ClipCard({ concept }: { concept: Concept }) {
+function ClipCard({
+  concept,
+  onFixClick,
+  index,
+  isFixActive,
+  audioUrl,
+  fixLinesText,
+  setFixLinesText,
+  tapping,
+  setTapping,
+  patching,
+  onComplete,
+  onCancel,
+}: {
+  concept: Concept;
+  onFixClick?: () => void;
+  index?: number;
+  isFixActive?: boolean;
+  audioUrl?: string | undefined;
+  fixLinesText?: string;
+  setFixLinesText?: (v: string) => void;
+  tapping?: boolean;
+  setTapping?: (v: boolean) => void;
+  patching?: boolean;
+  onComplete?: (taps: number[]) => void;
+  onCancel?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  // Keep local open state in sync with parent-controlled active flag
+  useEffect(() => {
+    if (isFixActive) setOpen(true);
+    if (!isFixActive) setOpen(false);
+  }, [isFixActive]);
+
+  const panelVisible = Boolean(isFixActive) || open;
+
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 20, padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
       <div className="phone-frame">
@@ -429,9 +565,106 @@ function ClipCard({ concept }: { concept: Concept }) {
         <p style={{ fontSize: 14, color: "var(--paper)" }}>{concept.ig_caption}</p>
       </div>
 
-      <a href={`${API_BASE}${concept.clip_url}`} download style={{ ...buttonStyle, textAlign: "center", textDecoration: "none", display: "block" }}>
-        Download
-      </a>
+      <div style={{ display: "flex", gap: 8 }}>
+        <a href={`${API_BASE}${concept.clip_url}`} download style={{ ...buttonStyle, flex: 1, textAlign: "center", textDecoration: "none", display: "block" }}>
+          Download
+        </a>
+        {onFixClick && (
+          <button
+            onClick={() => {
+              try {
+                onFixClick?.();
+              } finally {
+                // ensure the panel appears immediately even if parent state
+                // updates are batched or delayed
+                setOpen(true);
+              }
+            }}
+            style={{ ...secondaryButtonStyle, flex: 1 }}
+          >
+            Fix lyrics
+          </button>
+        )}
+      </div>
+
+      {panelVisible && audioUrl && setFixLinesText && onComplete && onCancel && (
+        <div style={{ marginTop: 12 }}>
+          <p style={{ ...labelStyle, marginBottom: 8 }}>{`Fixing: ${concept.angle_name}`}</p>
+          <FixSectionPanel
+            audioUrl={audioUrl}
+            fixLinesText={fixLinesText ?? ""}
+            setFixLinesText={setFixLinesText}
+            tapping={!!tapping}
+            setTapping={setTapping!}
+            patching={!!patching}
+            onComplete={onComplete}
+            onCancel={onCancel}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FixSectionPanel({
+  audioUrl,
+  fixLinesText,
+  setFixLinesText,
+  tapping,
+  setTapping,
+  patching,
+  onComplete,
+  onCancel,
+}: {
+  audioUrl: string;
+  fixLinesText: string;
+  setFixLinesText: (v: string) => void;
+  tapping: boolean;
+  setTapping: (v: boolean) => void;
+  patching: boolean;
+  onComplete: (taps: number[]) => void;
+  onCancel: () => void;
+}) {
+  const lines = fixLinesText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  if (tapping) {
+    return (
+      <TapSync
+        audioUrl={audioUrl}
+        lines={lines}
+        onComplete={onComplete}
+        onCancel={() => setTapping(false)}
+      />
+    );
+  }
+
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 20, padding: 24, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div>
+        <strong style={{ fontFamily: "var(--font-display)", fontSize: 16 }}>Paste the lines to fix</strong>
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 4 }}>
+          One lyric line per row, in the order they're sung — e.g. just the chorus.
+        </p>
+      </div>
+      <textarea
+        value={fixLinesText}
+        onChange={(e) => setFixLinesText(e.target.value)}
+        placeholder={"Kiburi ni mzigo\nWeka chini usimame\n..."}
+        rows={5}
+        style={{ ...inputStyle, fontFamily: "var(--font-mono)", resize: "vertical" }}
+      />
+      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+        <button onClick={onCancel} style={secondaryButtonStyle}>
+          Cancel
+        </button>
+        <button
+          onClick={() => setTapping(true)}
+          disabled={lines.length === 0 || patching}
+          style={{ ...buttonStyle, opacity: lines.length === 0 || patching ? 0.4 : 1 }}
+        >
+          {patching ? "Applying fix..." : `Start tapping (${lines.length} lines)`}
+        </button>
+      </div>
     </div>
   );
 }
@@ -457,6 +690,18 @@ const buttonStyle: React.CSSProperties = {
   color: "#0c0b12",
   fontWeight: 700,
   fontFamily: "var(--font-display)",
+  cursor: "pointer",
+  fontSize: 15,
+};
+
+const secondaryButtonStyle: React.CSSProperties = {
+  padding: "12px 20px",
+  background: "transparent",
+  border: "1px solid var(--border)",
+  borderRadius: 10,
+  color: "var(--paper)",
+  fontWeight: 600,
+  fontFamily: "var(--font-body)",
   cursor: "pointer",
   fontSize: 15,
 };
