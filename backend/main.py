@@ -43,7 +43,8 @@ from cover_art import resolve_cover_art, extract_embedded_lyrics
 from render_video import make_full_lyric_video, get_audio_duration
 from lyric_align import align_lyrics_to_audio
 from tap_sync import build_lines_from_taps, merge_manual_and_auto_lines
-from fastapi import Body
+from fastapi import Body, Request
+import json
 
 app = FastAPI(title="hookcut API")
 
@@ -309,6 +310,7 @@ async def create_job(
         "aligned_lines": None,
         "audio_url": None,
         "render_params": None,
+        "patch_version": 0,
     }
 
     if mode == "lyric_video":
@@ -353,18 +355,29 @@ async def tap_sync_endpoint(payload: dict = Body(...)):
     return {"lines": manual_lines}
 
 
-def _rerender_lyric_video(job_id: str):
+def _rerender_lyric_video(job_id: str, version: int):
     """Re-render a lyric_video job's output using its current
     jobs[job_id]["aligned_lines"] - reuses stored render params, so this
     skips transcription and analysis entirely (the expensive parts) and
-    only redoes the subtitle build + video encode."""
+    only redoes the subtitle build + video encode.
+
+    version gets stamped into the output filename so each patch produces
+    a genuinely new URL. Without this, every re-render overwrote the same
+    filename - the corrected video really was written to disk, but the
+    browser's <video src="..."> never re-fetches a URL it's already
+    loaded, so the patch looked like it silently did nothing even though
+    it worked.
+    """
     try:
         params = jobs[job_id]["render_params"]
+        base_path = Path(params["output_path"])
+        versioned_path = str(base_path.with_name(f"{base_path.stem}_v{version}{base_path.suffix}"))
+
         make_full_lyric_video(
             audio_path=params["audio_path"],
             cover_path=params["cover_path"],
             segments=[],
-            output_path=params["output_path"],
+            output_path=versioned_path,
             width=params["width"],
             height=params["height"],
             lyrics_enabled=params["lyrics_enabled"],
@@ -380,7 +393,7 @@ def _rerender_lyric_video(job_id: str):
             "text_overlay_options": [],
             "tiktok_caption": "",
             "ig_caption": "",
-            "clip_url": f"/clips/{job_id}/{Path(params['output_path']).name}",
+            "clip_url": f"/clips/{job_id}/{Path(versioned_path).name}",
         }]
         jobs[job_id]["stage"] = "done"
 
@@ -389,15 +402,22 @@ def _rerender_lyric_video(job_id: str):
         jobs[job_id]["error"] = str(e)
 
 
-def _rerender_one_clip(job_id: str, concept_index: int):
+def _rerender_one_clip(job_id: str, concept_index: int, version: int):
     """Re-render a single clip (clips-mode job) using the job's current
     jobs[job_id]["aligned_lines"] - reuses stored render params, so this
     skips transcription and analysis entirely and only redoes the subtitle
-    build + video encode for the one affected clip."""
+    build + video encode for the one affected clip.
+
+    version is stamped into the output filename (same reasoning as
+    _rerender_lyric_video above) - the first patch to a clip already got
+    a fresh "_patched" URL, but a SECOND patch to that same clip would
+    have reused that identical filename and hit the same silent-no-op-
+    looking bug on the second correction.
+    """
     try:
         params = jobs[job_id]["render_params"]
         concept = jobs[job_id]["results"][concept_index]
-        safe_name = f"{concept_index}_{safe_filename(concept['angle_name'])}_patched"
+        safe_name = f"{concept_index}_{safe_filename(concept['angle_name'])}_patched_v{version}"
 
         out_path = recut_one_concept(
             input_path=params["input_path"],
@@ -419,7 +439,7 @@ def _rerender_one_clip(job_id: str, concept_index: int):
 
 
 @app.post("/api/jobs/{job_id}/patch-section")
-async def patch_section(job_id: str, payload: dict = Body(...)):
+async def patch_section(job_id: str, request: Request):
     """
     Correct a section of a completed job using manually-tapped line
     timing, then re-render (cheaply - no re-transcription).
@@ -436,25 +456,61 @@ async def patch_section(job_id: str, payload: dict = Body(...)):
         return {"error": "job not found"}
     if job.get("aligned_lines") is None or job.get("render_params") is None:
         return {"error": "this job has no alignment data to patch (lyrics were disabled, or the job isn't done yet)"}
+    # Support both JSON body and multipart/form-data (from the frontend when
+    # a cover image or other files need to be included). For multipart, the
+    # client sends `lines` and `taps` as JSON-encoded fields.
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/"):
+        form = await request.form()
+        # form values may be UploadFile for files or plain strings for fields
+        raw_lines = form.get("lines")
+        raw_taps = form.get("taps")
+        raw_fallback = form.get("fallback_line_duration")
+        try:
+            lines_text = json.loads(raw_lines) if raw_lines else []
+        except Exception:
+            lines_text = []
+        try:
+            taps = json.loads(raw_taps) if raw_taps else []
+        except Exception:
+            taps = []
+        try:
+            fallback = float(raw_fallback) if raw_fallback else 3.0
+        except Exception:
+            fallback = 3.0
 
-    lines_text = payload.get("lines", [])
-    taps = payload.get("taps", [])
-    fallback = payload.get("fallback_line_duration", 3.0)
+        # If a cover image was uploaded as part of the patch, save it and update
+        # the render params so the re-render uses the provided image.
+        cover_field = form.get("cover_image")
+        if cover_field is not None and hasattr(cover_field, "filename") and cover_field.filename:
+            job_dir = JOBS_DIR / job_id
+            cover_path = job_dir / cover_field.filename
+            with open(cover_path, "wb") as f:
+                shutil.copyfileobj(cover_field.file, f)
+            # store string path for render params
+            job["render_params"]["cover_path"] = str(cover_path)
+    else:
+        payload = await request.json()
+        lines_text = payload.get("lines", [])
+        taps = payload.get("taps", [])
+        fallback = payload.get("fallback_line_duration", 3.0)
 
     manual_lines = build_lines_from_taps(lines_text, taps, fallback)
     merged = merge_manual_and_auto_lines(job["aligned_lines"], manual_lines)
     jobs[job_id]["aligned_lines"] = merged
 
     jobs[job_id]["stage"] = "cutting_clips"
+    jobs[job_id]["patch_version"] = jobs[job_id].get("patch_version", 0) + 1
+    version = jobs[job_id]["patch_version"]
 
     if job["mode"] == "lyric_video":
-        thread = threading.Thread(target=_rerender_lyric_video, args=(job_id,), daemon=True)
+        thread = threading.Thread(target=_rerender_lyric_video, args=(job_id, version), daemon=True)
     else:
         concept_index = payload.get("concept_index")
         if concept_index is None or not (0 <= concept_index < len(job["results"])):
             jobs[job_id]["stage"] = "done"  # nothing actually started, don't leave it stuck
             return {"error": "concept_index required and must be a valid clip index for clips-mode jobs"}
-        thread = threading.Thread(target=_rerender_one_clip, args=(job_id, concept_index), daemon=True)
+        thread = threading.Thread(target=_rerender_one_clip, args=(job_id, concept_index, version), daemon=True)
 
     thread.start()
     return {"status": "patching", "job_id": job_id}
