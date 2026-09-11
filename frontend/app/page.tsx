@@ -323,23 +323,25 @@ export default function Home() {
                 </Field>
               </>
             ) : (
-              <Field label="Aspect ratio">
-                <select
-                  value={aspect}
-                  onChange={(e) => setAspect(e.target.value as Aspect)}
-                  style={inputStyle}
-                >
-                  <option value="16:9">16:9 (landscape, classic YouTube)</option>
-                  <option value="9:16">9:16 (vertical, Reels/Shorts)</option>
-                  <option value="1:1">1:1 (square)</option>
-                </select>
-              </Field>
-              <Field label="Lyrics style" hint="Karaoke burns in synced lyrics; Pop lyrics places styled captions">
-                <select value={lyricsStyle} onChange={(e) => setLyricsStyle(e.target.value as any)} style={inputStyle}>
-                  <option value="karaoke">Karaoke (burn-in)</option>
-                  <option value="pop">Pop lyrics</option>
-                </select>
-              </Field>
+              <>
+                <Field label="Aspect ratio">
+                  <select
+                    value={aspect}
+                    onChange={(e) => setAspect(e.target.value as Aspect)}
+                    style={inputStyle}
+                  >
+                    <option value="16:9">16:9 (landscape, classic YouTube)</option>
+                    <option value="9:16">9:16 (vertical, Reels/Shorts)</option>
+                    <option value="1:1">1:1 (square)</option>
+                  </select>
+                </Field>
+                <Field label="Lyrics style" hint="Karaoke burns in synced lyrics; Pop lyrics places styled captions">
+                  <select value={lyricsStyle} onChange={(e) => setLyricsStyle(e.target.value as any)} style={inputStyle}>
+                    <option value="karaoke">Karaoke (burn-in)</option>
+                    <option value="pop">Pop lyrics</option>
+                  </select>
+                </Field>
+              </>
             )}
 
             <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: "var(--paper)" }}>
