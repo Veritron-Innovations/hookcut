@@ -168,6 +168,106 @@ def align_reference_to_real_audio(
     return _dtw_align_arrays(ref_y, real_y, boundaries, sr, hop_length)
 
 
+def refine_words_against_audio(
+    words: list[dict],
+    audio_path: str,
+    work_dir: str,
+    lang: str = "en",
+    pad_seconds: float = 0.3,
+    sr: int = 16000,
+) -> list[dict]:
+    """
+    Real per-word forced alignment for a SHORT span of words (a single
+    line/card's worth - a few seconds of audio), refining their
+    individual timing against the actual audio instead of assuming a
+    flat pace or an index-fractional interpolation between coarser
+    checkpoints (what time_warp_words does).
+
+    This is what makes captions "word sensitive": even once a LINE's
+    overall start/end is correctly anchored (via tap sync or
+    hybrid_align), the words WITHIN it can still be individually
+    mistimed if their internal spacing is guessed rather than measured -
+    an audible mismatch (a word appears on screen only once the NEXT
+    word is actually being said) that a word-by-word caption style makes
+    especially visible, since every single word gets its own moment on
+    screen rather than sharing a line's overall highlight.
+
+    Synthesizes just these words via espeak-ng, then DTW-aligns that
+    synthetic reference against the real audio in [words[0].start - pad,
+    words[-1].end + pad] - a short enough window that the timbral gap
+    between TTS and real singing/speech (the core limitation of DTW-based
+    forced alignment - see forced_align()'s docstring) stays tractable.
+    Uses a finer hop_length than whole-song alignment does (32ms vs
+    128ms) - the memory blowup that forces a coarser hop_length at song
+    scale isn't a concern over a few seconds of audio, so there's no
+    reason not to use the better resolution here.
+
+    Returns a new word list with refined {word, start, end} - falls back
+    to returning the INPUT words UNCHANGED (never raises) if espeak-ng is
+    unavailable or synthesis/alignment fails for any reason, since a
+    failed refinement attempt should never leave captions worse than
+    whatever timing they already had.
+    """
+    if not words:
+        return words
+
+    try:
+        word_strings = [w["word"] for w in words]
+        ref_path, ref_boundaries = build_reference_track(word_strings, work_dir, lang=lang)
+
+        window_start = max(0.0, words[0]["start"] - pad_seconds)
+        window_end = words[-1]["end"] + pad_seconds
+
+        y_real, _ = librosa.load(audio_path, sr=sr, offset=window_start, duration=window_end - window_start)
+        if len(y_real) == 0:
+            return words
+        real_window_path = f"{work_dir}/_word_refine_window.wav"
+        sf.write(real_window_path, y_real, sr)
+
+        refined = align_reference_to_real_audio(ref_path, real_window_path, ref_boundaries, sr=sr, hop_length=512)
+        if not refined:
+            return words
+
+        # align_reference_to_real_audio's output is relative to the
+        # window's own start - rebase to absolute/song time.
+        for r in refined:
+            r["start"] += window_start
+            r["end"] += window_start
+
+        return refined
+    except Exception:
+        return words
+
+
+def refine_lines_word_timing(
+    lines: list[dict],
+    audio_path: str,
+    work_dir: str,
+    lang: str = "en",
+) -> list[dict]:
+    """
+    Apply refine_words_against_audio to every line's words - the
+    line-level refinement pass that makes word-by-word captions "word
+    sensitive" across a whole song/clip, not just within one line tested
+    in isolation. Each line's OWN start/end (however it was determined -
+    tap sync, hybrid_align, whatever) is preserved as-is; only the
+    individual word timings WITHIN each line get refined.
+
+    Skips any line with 1 or fewer words - there's nothing internal to
+    place a single word relative to, so refining it would just spend an
+    espeak-ng + DTW pass to confirm what's already known.
+    """
+    refined_lines = []
+    for line in lines:
+        words = line.get("words", [])
+        if len(words) <= 1:
+            refined_lines.append(line)
+            continue
+        refined_words = refine_words_against_audio(words, audio_path, work_dir, lang=lang)
+        refined_lines.append({**line, "words": refined_words})
+    return refined_lines
+
+
 def forced_align(
     lyrics_text: str,
     audio_path: str,
@@ -193,7 +293,7 @@ def forced_align(
     return align_reference_to_real_audio(ref_path, audio_path, boundaries)
 
 
-def hybrid_align(
+def bucketed_forced_align(
     lyrics_text: str,
     segments: list,
     audio_path: str,
@@ -203,12 +303,25 @@ def hybrid_align(
     sr: int = 16000,
 ) -> list[dict]:
     """
-    Hybrid alignment: use Whisper's own segment/pause boundaries as a
-    coarse skeleton, then run LOCAL forced alignment (TTS + DTW) within
-    each small segment window - instead of one DTW pass across the whole
-    song, which compares a flat TTS voice against the full mixed/produced
-    track in one shot and can drift badly on sung content (see
-    forced_align() above).
+    NOTE: superseded as the default alignment method by hybrid_align.py's
+    hybrid_align() - kept here for comparison/fallback use, not called by
+    the live product. Real-track testing (see hybrid_align.py's module
+    docstring) found that running local forced alignment on EVERY
+    Whisper segment (this function's approach) is less reliable than only
+    refining the SPECIFIC stretches where Whisper's own word detection
+    actually collapsed, because DTW-matching a flat TTS voice against
+    real produced/sung audio has a large timbral gap that's tractable
+    over a short window but adds risk on every segment, not just the ones
+    that need it. This function used to be named hybrid_align() - renamed
+    to remove the collision with hybrid_align.py's better version of that
+    name, after nearly re-introducing that exact bug live in this codebase.
+
+    Bucket-then-refine forced alignment: use Whisper's own segment/pause
+    boundaries as a coarse skeleton, then run LOCAL forced alignment
+    (TTS + DTW) within EVERY segment window - instead of one DTW pass
+    across the whole song, which compares a flat TTS voice against the
+    full mixed/produced track in one shot and can drift badly on sung
+    content (see forced_align() above).
 
     Whisper's timing of WHEN something is sung is usually more reliable
     than its guess at WHAT is sung, even in Sheng/Swahili - detecting a
@@ -231,7 +344,8 @@ def hybrid_align(
        words via espeak-ng and run DTW against only that segment's small,
        padded audio window.
     """
-    from lyric_align import clean_lyrics_for_alignment, _distribute_words_over_span
+    from lyric_align import clean_lyrics_for_alignment
+    from word_timing import distribute_words_over_span
 
     lines = clean_lyrics_for_alignment(lyrics_text)
     user_words: list[str] = []
@@ -291,7 +405,7 @@ def hybrid_align(
         # spread across the segment's own span is simpler and safer.
         if len(bucket_words) <= 2:
             all_word_timings.extend(
-                _distribute_words_over_span(bucket_words, seg["start"], seg["end"])
+                distribute_words_over_span(bucket_words, seg["start"], seg["end"])
             )
             continue
 
@@ -303,7 +417,7 @@ def hybrid_align(
 
         if len(local_audio) < int(sr * 0.2):
             all_word_timings.extend(
-                _distribute_words_over_span(bucket_words, seg["start"], seg["end"])
+                distribute_words_over_span(bucket_words, seg["start"], seg["end"])
             )
             continue
 
@@ -317,7 +431,7 @@ def hybrid_align(
                 raise ValueError("empty DTW result")
         except Exception:
             all_word_timings.extend(
-                _distribute_words_over_span(bucket_words, seg["start"], seg["end"])
+                distribute_words_over_span(bucket_words, seg["start"], seg["end"])
             )
             continue
 

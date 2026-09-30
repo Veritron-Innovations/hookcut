@@ -3,9 +3,12 @@ openai-whisper
 
 # LLM API (Gemini free tier for testing)
 google-genai
+pydantic
 
-# Audio analysis (for music climax/energy detection)
+# Audio analysis (for music climax/energy detection, and per-word energy
+# scoring for pop-word captions in pop_captions.py)
 librosa
+numpy
 
 # Env vars
 python-dotenv
@@ -18,3 +21,36 @@ Pillow
 
 # Forced alignment (experimental) - audio feature extraction + DTW
 soundfile
+# Forced alignment also needs the espeak-ng SYSTEM package (not pip-
+# installable) for reference-track TTS synthesis - install separately,
+# e.g. `apt-get install espeak-ng` on Debian/Ubuntu. Falls back to the
+# older Whisper-native-timestamp method automatically if espeak-ng isn't
+# on PATH - not a hard requirement, but alignment is meaningfully worse
+# without it.
+
+# Vocal isolation before transcription/alignment (vocal_separation.py) -
+# meaningfully improves accuracy on produced/mixed tracks by giving
+# Whisper and the forced-alignment DTW a clean vocal-only signal instead
+# of the full mix, per AudioShake's own public documentation of why they
+# do this (see vocal_separation.py). Falls back to using the full mix
+# automatically if Demucs isn't installed or separation fails for any
+# reason - not a hard requirement, but both transcription and alignment
+# are meaningfully worse on a produced track without it.
+#
+# IMPORTANT: demucs pulls in torch as a dependency, and a PLAIN
+# `pip install demucs` (or an uncommented `demucs` line here) defaults to
+# torch's full CUDA/GPU build - several GIGABYTES of NVIDIA libraries a
+# normal laptop doesn't need and often doesn't have disk space for
+# (reproduced failing outright with "No space left on device" pulling
+# 3GB+ of CUDA packages). Install the lightweight CPU-only build FIRST,
+# then demucs on top of it - NOT via this file directly:
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install demucs
+#
+# Left commented out below rather than active, so a plain
+# `pip install -r requirements.txt` can't accidentally trigger the
+# multi-GB CUDA pull - uncomment only after running the two commands
+# above, at which point pip will see torch is already satisfied and
+# won't try to replace it.
+# demucs

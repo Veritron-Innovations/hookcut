@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import TapSync from "../TapSync";
+import { splitIntoTapPhrases } from "../lib/tapPhraseSplit";
 
 const API_BASE = "http://localhost:8000";
 
@@ -10,7 +11,7 @@ export default function DemoTapSyncPage() {
   const [linesText, setLinesText] = useState("");
   const [result, setResult] = useState<any | null>(null);
 
-  const lines = linesText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = splitIntoTapPhrases(linesText);
 
   return (
     <main style={{ maxWidth: 860, margin: "0 auto", padding: 40 }}>

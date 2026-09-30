@@ -10,25 +10,34 @@ import json
 from pathlib import Path
 
 
-def transcribe(input_path: str, model_size: str = "base") -> dict:
+def transcribe(input_path: str, model_size: str = "base", word_timestamps: bool = True) -> dict:
     """
-    Transcribe an audio/video file with word-level timestamps.
+    Transcribe an audio/video file, optionally with word-level timestamps.
 
     Args:
         input_path: path to audio or video file (mp3, wav, mp4, mov, etc.)
         model_size: whisper model size - "tiny", "base", "small", "medium", "large"
                     "base" is a good speed/accuracy tradeoff for testing.
+        word_timestamps: whether to compute per-word timing within each
+            segment. This is a genuinely more expensive step on top of
+            plain segment transcription (Whisper does extra cross-attention
+            alignment work for it) - skip it (pass False) whenever nothing
+            downstream needs word-level timing, e.g. hook/clip selection
+            only reads each segment's TEXT, never its words. Leave True
+            whenever captions/lyrics will be rendered.
 
     Returns:
         dict with "text" (full transcript) and "segments" (list of
         {start, end, text, words} timestamped chunks). Each segment's
         "words" is a list of {word, start, end} - needed for karaoke-style
-        word-by-word lyric highlighting. Word-level timing is noisier than
+        word-by-word lyric highlighting - and is an empty list when
+        word_timestamps=False. Word-level timing is noisier than
         line-level timing, especially on sung (vs spoken) audio - expect
-        close-but-not-frame-perfect accuracy.
+        close-but-not-frame-perfect accuracy (see lyric_align.py /
+        forced_align.py for real forced-alignment options that do better).
     """
     model = whisper.load_model(model_size)
-    result = model.transcribe(input_path, verbose=False, word_timestamps=True)
+    result = model.transcribe(input_path, verbose=False, word_timestamps=word_timestamps)
 
     segments = []
     for seg in result["segments"]:

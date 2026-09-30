@@ -36,9 +36,8 @@ import soundfile as sf
 from lyric_align import (
     clean_lyrics_for_alignment,
     _chunk_words_into_lines,
-    _distribute_words_over_span,
-    _time_warp_words,
 )
+from word_timing import distribute_words_over_span, time_warp_words
 from forced_align import build_reference_track, align_reference_to_real_audio, check_espeak_available
 
 DEFAULT_GAP_THRESHOLD = 2.5  # seconds - a gap this large between consecutive
@@ -94,11 +93,16 @@ def hybrid_align(
 
     if not whisper_words:
         # Nothing to anchor to at all - fall back to flat proportional.
-        return _distribute_words_over_span(user_words, 0.0, total_duration)
+        return distribute_words_over_span(user_words, 0.0, total_duration)
 
     # Global pass: cheap Whisper-checkpoint interpolation for every word,
     # same as the existing heuristic. This is the baseline we refine on top of.
-    global_timings = _time_warp_words(user_words, whisper_words, total_duration)
+    # start_bound/end_bound both get set from total_duration together (or
+    # neither, if it's None) - matching this function's original all-or-
+    # nothing intro/outro-stretch behavior before start_bound and end_bound
+    # were split into independently-settable params in word_timing.py.
+    start_bound = 0.0 if total_duration is not None else None
+    global_timings = time_warp_words(user_words, whisper_words, start_bound=start_bound, end_bound=total_duration)
 
     gaps = _find_large_gaps(whisper_words, gap_threshold)
     if not gaps or not check_espeak_available():
@@ -112,7 +116,7 @@ def hybrid_align(
 
     for gi, gap in enumerate(gaps):
         # Which user-word indices fall in this gap's virtual-index range?
-        # (inverse of the v = (i/m)*n mapping _time_warp_words uses).
+        # (inverse of the v = (i/m)*n mapping time_warp_words uses).
         # A 1-slot buffer on each side avoids under-selecting: the exact
         # slot boundaries only bound where the GAP itself sits in
         # Whisper's index space, but the compression it causes can spill

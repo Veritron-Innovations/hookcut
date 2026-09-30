@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import SnakeGame from "./SnakeGame";
 import TapSync from "./TapSync";
+import CaptionTimelineEditor from "./CaptionTimelineEditor";
 import { splitIntoTapPhrases } from "./lib/tapPhraseSplit";
+import { inputStyle, buttonStyle, secondaryButtonStyle, labelStyle } from "./styles";
 
 const API_BASE = "http://localhost:8000";
 
@@ -22,6 +24,12 @@ type Concept = {
 
 };
 
+type AlignedLine = {
+  start: number;
+  end: number;
+  words: { word: string; start: number; end: number }[];
+};
+
 type JobState = {
   stage: string;
   results: Concept[] | null;
@@ -30,6 +38,7 @@ type JobState = {
   progress?: { current: number; total: number } | null;
   started_at?: number;
   audio_url?: string | null;
+  aligned_lines?: AlignedLine[] | null;
 };
 
 const STAGE_LABELS: Record<string, string> = {
@@ -67,7 +76,8 @@ export default function Home() {
   const [aspect, setAspect] = useState<Aspect>("16:9");
   const [lyrics, setLyrics] = useState(true);
   const [lyricsText, setLyricsText] = useState("");
-  const [lyricsStyle, setLyricsStyle] = useState<"karaoke" | "pop">("karaoke");
+  const [captionStyle, setCaptionStyle] = useState<"pop_word" | "line">("pop_word");
+  const [captionTheme, setCaptionTheme] = useState<"default" | "comic">("default");
   const [probingLyrics, setProbingLyrics] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobState | null>(null);
@@ -79,6 +89,13 @@ export default function Home() {
   const [tapping, setTapping] = useState(false);
   const [patching, setPatching] = useState(false);
   const [patchConceptIndex, setPatchConceptIndex] = useState<number | null>(null);
+  const [timelineEditing, setTimelineEditing] = useState(false);
+  // Object URL for the locally-selected cover image File, so the
+  // timeline editor's live preview can show real cover art instead of a
+  // plain background - only available while `coverImage` is still in
+  // memory from selection (this session), not persisted/refetched from
+  // the server.
+  const coverImageUrl = useMemo(() => (coverImage ? URL.createObjectURL(coverImage) : undefined), [coverImage]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tipRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(0);
@@ -132,8 +149,9 @@ export default function Home() {
       formData.append("num_concepts", String(numConcepts));
     } else {
       formData.append("aspect", aspect);
-      formData.append("lyrics_style", lyricsStyle);
     }
+    formData.append("caption_style", captionStyle);
+    formData.append("caption_theme", captionTheme);
 
     const res = await fetch(`${API_BASE}/api/jobs`, { method: "POST", body: formData });
     const data = await res.json();
@@ -154,29 +172,15 @@ export default function Home() {
     const lines = splitIntoTapPhrases(fixLinesText);
 
     setPatching(true);
-    if (job?.mode === "lyric_video") {
-      const fd = new FormData();
-      fd.append("lines", JSON.stringify(lines));
-      fd.append("taps", JSON.stringify(taps));
-      if (patchConceptIndex !== null) fd.append("concept_index", String(patchConceptIndex));
-      if (coverImage) fd.append("cover_image", coverImage);
-      fd.append("lyrics_style", lyricsStyle);
-
-      await fetch(`${API_BASE}/api/jobs/${jobId}/patch-section`, {
-        method: "POST",
-        body: fd,
-      });
-    } else {
-      await fetch(`${API_BASE}/api/jobs/${jobId}/patch-section`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          lines,
-          taps,
-          ...(patchConceptIndex !== null ? { concept_index: patchConceptIndex } : {}),
-        }),
-      });
-    }
+    await fetch(`${API_BASE}/api/jobs/${jobId}/patch-section`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lines,
+        taps,
+        ...(patchConceptIndex !== null ? { concept_index: patchConceptIndex } : {}),
+      }),
+    });
     setPatching(false);
     setTapping(false);
     setFixingSection(false);
@@ -205,6 +209,27 @@ export default function Home() {
     setTapping(false);
     setFixLinesText("");
     setPatchConceptIndex(null);
+  };
+
+  const handleTimelineSave = async (blocks: { text: string; start: number; end: number }[]) => {
+    if (!jobId) return;
+    setPatching(true);
+    await fetch(`${API_BASE}/api/jobs/${jobId}/patch-lines`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lines: blocks }),
+    });
+    setPatching(false);
+    setTimelineEditing(false);
+
+    setJob((prev) => (prev ? { ...prev, stage: "cutting_clips" } : prev));
+    startTimeRef.current = Date.now();
+    setElapsed(0);
+    setTipIndex(0);
+    pollJob(jobId);
+    tipRef.current = setInterval(() => {
+      setTipIndex((i) => (i + 1) % TIPS.length);
+    }, 6000);
   };
 
   const reset = () => {
@@ -323,26 +348,59 @@ export default function Home() {
                 </Field>
               </>
             ) : (
-              <>
-                <Field label="Aspect ratio">
-                  <select
-                    value={aspect}
-                    onChange={(e) => setAspect(e.target.value as Aspect)}
-                    style={inputStyle}
-                  >
-                    <option value="16:9">16:9 (landscape, classic YouTube)</option>
-                    <option value="9:16">9:16 (vertical, Reels/Shorts)</option>
-                    <option value="1:1">1:1 (square)</option>
-                  </select>
-                </Field>
-                <Field label="Lyrics style" hint="Karaoke burns in synced lyrics; Pop lyrics places styled captions">
-                  <select value={lyricsStyle} onChange={(e) => setLyricsStyle(e.target.value as any)} style={inputStyle}>
-                    <option value="karaoke">Karaoke (burn-in)</option>
-                    <option value="pop">Pop lyrics</option>
-                  </select>
-                </Field>
-              </>
+              <Field label="Aspect ratio">
+                <select
+                  value={aspect}
+                  onChange={(e) => setAspect(e.target.value as Aspect)}
+                  style={inputStyle}
+                >
+                  <option value="16:9">16:9 (landscape, classic YouTube)</option>
+                  <option value="9:16">9:16 (vertical, Reels/Shorts)</option>
+                  <option value="1:1">1:1 (square)</option>
+                </select>
+              </Field>
             )}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+              <Field
+                label="Caption engine"
+                hint={
+                  captionStyle === "pop_word"
+                    ? "TikTok-style — one word (or a quick group) at a time, size/colour driven by loudness"
+                    : "the original two-line karaoke display, current line highlighted word by word"
+                }
+              >
+                <select
+                  value={captionStyle}
+                  onChange={(e) => setCaptionStyle(e.target.value as "pop_word" | "line")}
+                  style={inputStyle}
+                >
+                  <option value="pop_word">Pop captions (word-by-word)</option>
+                  <option value="line">Line karaoke (classic)</option>
+                </select>
+              </Field>
+
+              <Field
+                label="Caption theme"
+                hint={
+                  captionStyle !== "pop_word"
+                    ? "only applies to the pop captions engine"
+                    : captionTheme === "comic"
+                    ? "Spider-Man palette — impact bursts on loud/shouted words"
+                    : "white/yellow/orange, driven by loudness"
+                }
+              >
+                <select
+                  value={captionTheme}
+                  onChange={(e) => setCaptionTheme(e.target.value as "default" | "comic")}
+                  disabled={captionStyle !== "pop_word"}
+                  style={{ ...inputStyle, opacity: captionStyle !== "pop_word" ? 0.5 : 1 }}
+                >
+                  <option value="default">Default</option>
+                  <option value="comic">Comic (Spider-Man)</option>
+                </select>
+              </Field>
+            </div>
 
             <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: "var(--paper)" }}>
               <input type="checkbox" checked={lyrics} onChange={(e) => setLyrics(e.target.checked)} />
@@ -420,9 +478,14 @@ export default function Home() {
             >
               Download
             </a>
-            {job.audio_url && !fixingSection && (
+            {job.audio_url && !fixingSection && !timelineEditing && (
               <button onClick={() => startFixingSection(null)} style={{ ...secondaryButtonStyle, flex: 1 }}>
                 Fix a section
+              </button>
+            )}
+            {job.audio_url && !fixingSection && !timelineEditing && (
+              <button onClick={() => setTimelineEditing(true)} style={{ ...secondaryButtonStyle, flex: 1 }}>
+                Timeline editor
               </button>
             )}
           </div>
@@ -440,6 +503,19 @@ export default function Home() {
               />
             </div>
           )}
+          {timelineEditing && job.audio_url && (
+            <FullScreenEditorOverlay onClose={() => setTimelineEditing(false)}>
+              <CaptionTimelineEditor
+                audioUrl={`${API_BASE}${job.audio_url}`}
+                existingLines={job.aligned_lines ?? undefined}
+                onSave={handleTimelineSave}
+                onCancel={() => setTimelineEditing(false)}
+                saving={patching}
+                captionTheme={captionTheme}
+                coverImageUrl={coverImageUrl}
+              />
+            </FullScreenEditorOverlay>
+          )}
         </div>
       )}
 
@@ -447,7 +523,19 @@ export default function Home() {
         <div style={{ marginTop: 40 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
             <h2 style={{ fontSize: 24 }}>{job.results.length} clips ready</h2>
-            <button onClick={reset} style={buttonStyle}>Start another</button>
+            <div style={{ display: "flex", gap: 10 }}>
+              {job.audio_url && !fixingSection && job.results.length > 1 && (
+                <button onClick={() => startFixingSection(null)} style={secondaryButtonStyle}>
+                  Fix lyrics on all clips
+                </button>
+              )}
+              {job.audio_url && !fixingSection && !timelineEditing && (
+                <button onClick={() => setTimelineEditing(true)} style={secondaryButtonStyle}>
+                  Timeline editor
+                </button>
+              )}
+              <button onClick={reset} style={buttonStyle}>Start another</button>
+            </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: 24 }}>
             {job.results.map((concept, i) => (
@@ -458,10 +546,12 @@ export default function Home() {
               />
             ))}
           </div>
-          {fixingSection && job.audio_url && patchConceptIndex !== null && (
+          {fixingSection && job.audio_url && (
             <div style={{ maxWidth: 480, margin: "24px auto 0" }}>
               <p style={{ ...labelStyle, marginBottom: 8, textAlign: "center" }}>
-                Fixing: {job.results[patchConceptIndex].angle_name}
+                {patchConceptIndex !== null
+                  ? `Fixing: ${job.results[patchConceptIndex].angle_name}`
+                  : `Fixing all ${job.results.length} clips at once`}
               </p>
               <FixSectionPanel
                 audioUrl={`${API_BASE}${job.audio_url}`}
@@ -475,9 +565,54 @@ export default function Home() {
               />
             </div>
           )}
+          {timelineEditing && job.audio_url && (
+            <FullScreenEditorOverlay onClose={() => setTimelineEditing(false)}>
+              <p style={{ ...labelStyle, marginBottom: 8 }}>
+                Fixing all {job.results.length} clips at once
+              </p>
+              <CaptionTimelineEditor
+                audioUrl={`${API_BASE}${job.audio_url}`}
+                existingLines={job.aligned_lines ?? undefined}
+                onSave={handleTimelineSave}
+                onCancel={() => setTimelineEditing(false)}
+                saving={patching}
+                captionTheme={captionTheme}
+                coverImageUrl={coverImageUrl}
+              />
+            </FullScreenEditorOverlay>
+          )}
         </div>
       )}
     </main>
+  );
+}
+
+function FullScreenEditorOverlay({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(12,11,18,0.97)",
+        zIndex: 1000,
+        display: "flex",
+        justifyContent: "center",
+        overflowY: "auto",
+        padding: "28px 20px",
+      }}
+    >
+      <div style={{ width: "min(1400px, 94vw)", display: "flex", flexDirection: "column", gap: 4 }}>
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -643,48 +778,3 @@ function FixSectionPanel({
   );
 }
 
-const inputStyle: React.CSSProperties = {
-  display: "block",
-  width: "100%",
-  padding: "10px 12px",
-  marginTop: 6,
-  background: "var(--surface-2)",
-  border: "1px solid var(--border)",
-  borderRadius: 10,
-  color: "var(--paper)",
-  fontSize: 14,
-  boxSizing: "border-box",
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: "12px 20px",
-  background: "var(--gradient-signature)",
-  border: "none",
-  borderRadius: 10,
-  color: "#0c0b12",
-  fontWeight: 700,
-  fontFamily: "var(--font-display)",
-  cursor: "pointer",
-  fontSize: 15,
-};
-
-const secondaryButtonStyle: React.CSSProperties = {
-  padding: "12px 20px",
-  background: "transparent",
-  border: "1px solid var(--border)",
-  borderRadius: 10,
-  color: "var(--paper)",
-  fontWeight: 600,
-  fontFamily: "var(--font-body)",
-  cursor: "pointer",
-  fontSize: 15,
-};
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 11,
-  textTransform: "uppercase",
-  letterSpacing: 0.6,
-  color: "var(--muted)",
-  marginBottom: 4,
-  fontWeight: 600,
-};

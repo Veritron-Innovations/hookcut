@@ -188,6 +188,111 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return output_path
 
 
+def _flatten_words_for_captions(segments: list, lines_override: list | None) -> list:
+    """
+    Get a flat, chronological word list for the pop-word caption style,
+    from whichever source of truth is in play: user-corrected/tap-synced
+    lines if given, otherwise Whisper's own segments.
+    """
+    if lines_override is not None:
+        return [w for line in lines_override for w in line.get("words", [])]
+    from lyric_lines import flatten_words
+    return flatten_words(segments)
+
+
+def build_captions_ass(
+    segments: list,
+    clip_start: float,
+    clip_end: float,
+    output_path: str,
+    width: int = CANVAS_W,
+    height: int = CANVAS_H,
+    lines_override: list | None = None,
+    caption_style: str = "pop_word",
+    audio_path: str | None = None,
+    caption_theme: str = "default",
+    caption_language: str = "en",
+    refine_word_timing: bool = True,
+    alignment_audio_path: str | None = None,
+) -> str:
+    """
+    Dispatch to whichever caption style is requested:
+    - "pop_word" (default): TikTok-style single large word at a time,
+      center screen, size/colour/animation driven by that word's audio
+      loudness. See pop_captions.py.
+    - "line": the original Spotify-style two-line karaoke display, with
+      the current line highlighted word-by-word and the next line
+      previewed dim underneath. See build_ass_subtitles above.
+
+    audio_path is only used by "pop_word" (for loudness scoring - the
+    energy tiers driving word size/colour) - pass the same media
+    actually being rendered for this clip/video, so the energy read
+    matches what a listener actually hears. Safe to omit; captions still
+    render, just without energy-based size/colour variation.
+
+    alignment_audio_path, if given, is used INSTEAD of audio_path
+    specifically for word-timing refinement (not for loudness scoring) -
+    pass an isolated vocal stem here (see vocal_separation.py) to align
+    against a cleaner signal than the full mix, while still scoring
+    loudness/energy against the full mix via audio_path (a song's "hot"
+    moment is about the whole production hitting hard, not just vocal
+    volume - these two purposes genuinely want different audio). Falls
+    back to audio_path when not given.
+
+    caption_theme is only used by "pop_word" - see pop_captions.THEMES
+    for what each one does (e.g. "comic" for the Spider-Man-style comic
+    palette with impact bursts on loud words).
+
+    caption_language is only used by "pop_word" when refine_word_timing
+    is on - passed to espeak-ng for the reference-track synthesis (see
+    forced_align.refine_words_against_audio). Get this wrong (e.g.
+    Swahili phonetics on English lyrics) and refinement makes timing
+    WORSE, not better - always pass the actual detected/known language of
+    the lyrics, not a guess.
+
+    refine_word_timing ("pop_word" only): runs real per-word forced
+    alignment (espeak-ng + DTW) within each line/segment before
+    rendering, instead of trusting whatever coarser interpolation placed
+    each word - this is what makes individual words land in sync rather
+    than just the line as a whole (see forced_align.refine_words_
+    against_audio's docstring for why line-level-correct timing can still
+    have visibly wrong WORD placement within it). Meaningfully slower -
+    one espeak-ng + DTW pass per line/segment, not just once per clip -
+    so it's skippable for a quick preview render. Silently falls back to
+    unrefined timing (never fails the render) if espeak-ng isn't
+    installed or a specific line's refinement errors out.
+    """
+    if caption_style == "pop_word":
+        from pop_captions import build_pop_captions_ass
+
+        lines_for_words = lines_override if lines_override is not None else segments
+
+        refine_source = alignment_audio_path or audio_path
+        if refine_word_timing and refine_source and lines_for_words:
+            from forced_align import refine_lines_word_timing, check_espeak_available
+            if check_espeak_available():
+                try:
+                    work_dir = str(Path(output_path).parent)
+                    lines_for_words = refine_lines_word_timing(
+                        lines_for_words, refine_source, work_dir, lang=caption_language,
+                    )
+                except Exception:
+                    pass  # keep whatever timing lines_for_words already had
+
+        words = [w for line in lines_for_words for w in line.get("words", [])]
+        return build_pop_captions_ass(
+            words, clip_start, clip_end, output_path, width, height,
+            audio_path=audio_path, theme=caption_theme,
+        )
+    elif caption_style == "line":
+        return build_ass_subtitles(
+            segments, clip_start, clip_end, output_path, width, height,
+            lines_override=lines_override,
+        )
+    else:
+        raise ValueError(f"Unknown caption_style '{caption_style}' - use 'pop_word' or 'line'")
+
+
 def get_audio_duration(audio_path: str) -> float:
     """Get the duration (in seconds) of an audio/video file via ffprobe."""
     cmd = [
@@ -276,6 +381,10 @@ def reformat_and_caption_video_clip(
     fit_mode: str = "letterbox",
     bar_color: str = "black",
     precomputed_lines: list | None = None,
+    caption_style: str = "pop_word",
+    caption_theme: str = "default",
+    caption_language: str = "en",
+    alignment_audio_path: str | None = None,
 ) -> str:
     """
     Reformat an existing video clip to vertical (default 1080x1920), and
@@ -336,9 +445,14 @@ def reformat_and_caption_video_clip(
         # since the scale/pad or crop filter runs first in the chain
         # below - the subtitle overlay applies to the already-vertical
         # frame, not the source's original (possibly landscape) dimensions.
-        ass_path = build_ass_subtitles(
+        # audio_path=video_clip_path: pop_word energy scoring pulls the
+        # audio straight out of this same clip via ffmpeg, so loudness
+        # matches what's actually heard on screen.
+        ass_path = build_captions_ass(
             segments, clip_start, clip_end, f"{work_dir}/{stem}.ass", width, height,
-            lines_override=lines_override,
+            lines_override=lines_override, caption_style=caption_style,
+            audio_path=video_clip_path, caption_theme=caption_theme, caption_language=caption_language,
+            alignment_audio_path=alignment_audio_path,
         )
         escaped_ass = ass_path.replace("\\", "/").replace(":", "\\:")
         vf_parts.append(f"subtitles='{escaped_ass}':charenc=UTF-8")
@@ -371,6 +485,10 @@ def make_vertical_clip(
     lyrics_text: str | None = None,
     total_duration: float | None = None,
     precomputed_lines: list | None = None,
+    caption_style: str = "pop_word",
+    caption_theme: str = "default",
+    caption_language: str = "en",
+    alignment_audio_path: str | None = None,
 ) -> str:
     """
     Short-clip flow (9:16): build background from cover art, optionally
@@ -400,9 +518,11 @@ def make_vertical_clip(
         if lines_override is None and lyrics_text:
             from lyric_align import align_lyrics_to_audio
             lines_override = align_lyrics_to_audio(lyrics_text, segments, total_duration)
-        ass_path = build_ass_subtitles(
+        ass_path = build_captions_ass(
             segments, clip_start, clip_end, f"{work_dir}/{stem}.ass", CANVAS_W, CANVAS_H,
-            lines_override=lines_override,
+            lines_override=lines_override, caption_style=caption_style,
+            audio_path=audio_clip_path, caption_theme=caption_theme, caption_language=caption_language,
+            alignment_audio_path=alignment_audio_path,
         )
 
     return render_clip(audio_clip_path, bg_path, output_path, ass_path)
@@ -418,6 +538,10 @@ def make_full_lyric_video(
     lyrics_enabled: bool = True,
     lyrics_text: str | None = None,
     precomputed_lines: list | None = None,
+    caption_style: str = "line",
+    caption_theme: str = "default",
+    caption_language: str = "en",
+    alignment_audio_path: str | None = None,
 ) -> str:
     """
     Full-length lyric video flow (default 16:9 landscape): renders the
@@ -432,6 +556,13 @@ def make_full_lyric_video(
     directly instead of computing alignment here - lets a caller skip
     Whisper's transcription entirely when using real forced alignment,
     since segments aren't needed in that case.
+
+    caption_style defaults to "line" here (unlike the short-clip
+    functions, which default to "pop_word") - full lyric videos have
+    historically used the traditional karaoke display. Pass
+    caption_style="pop_word" to get the word-by-word pop captions engine
+    for a full-length video instead; caption_theme only has an effect
+    when caption_style="pop_word" (see pop_captions.THEMES).
     """
     work_dir = str(Path(output_path).parent)
     stem = Path(output_path).stem
@@ -446,9 +577,11 @@ def make_full_lyric_video(
         if lines_override is None and lyrics_text:
             from lyric_align import align_lyrics_to_audio
             lines_override = align_lyrics_to_audio(lyrics_text, segments, duration)
-        ass_path = build_ass_subtitles(
+        ass_path = build_captions_ass(
             segments, 0.0, duration, f"{work_dir}/{stem}.ass", width, height,
-            lines_override=lines_override,
+            lines_override=lines_override, caption_style=caption_style,
+            audio_path=audio_path, caption_theme=caption_theme, caption_language=caption_language,
+            alignment_audio_path=alignment_audio_path,
         )
 
     return render_clip(audio_path, bg_path, output_path, ass_path)

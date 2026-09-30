@@ -17,6 +17,29 @@ const OPPOSITE: Record<Direction, Direction> = {
   RIGHT: "LEFT",
 };
 
+const BEST_SCORE_KEY = "hookcut_snake_best_score";
+
+function loadBestScore(): number {
+  try {
+    const raw = window.localStorage.getItem(BEST_SCORE_KEY);
+    const parsed = raw ? parseInt(raw, 10) : 0;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  } catch {
+    // localStorage can throw in private-browsing modes on some browsers -
+    // degrade to session-only best rather than crashing the game.
+    return 0;
+  }
+}
+
+function saveBestScore(value: number) {
+  try {
+    window.localStorage.setItem(BEST_SCORE_KEY, String(value));
+  } catch {
+    // same private-browsing fallback as loadBestScore - a failed save
+    // just means best score won't persist this session, not a crash.
+  }
+}
+
 function randomCell(exclude: Point[]): Point {
   let cell: Point;
   do {
@@ -33,8 +56,18 @@ export default function SnakeGame() {
   const foodRef = useRef<Point>(randomCell(snakeRef.current));
   const [score, setScore] = useState(0);
   const [best, setBest] = useState(0);
+  const [isNewBest, setIsNewBest] = useState(false);
   const [gameOver, setGameOver] = useState(false);
   const [started, setStarted] = useState(false);
+
+  // Read the persisted best score once the component has mounted client-
+  // side. Reading localStorage during the initial render would crash
+  // under Next.js's server-side render pass (no `window` there) - this
+  // runs only in the browser, after hydration, which is the standard
+  // safe pattern for browser-only storage in a "use client" component.
+  useEffect(() => {
+    setBest(loadBestScore());
+  }, []);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -71,6 +104,7 @@ export default function SnakeGame() {
     foodRef.current = randomCell(snakeRef.current);
     setScore(0);
     setGameOver(false);
+    setIsNewBest(false);
     setStarted(true);
     draw();
   }, [draw]);
@@ -98,7 +132,14 @@ export default function SnakeGame() {
 
       if (hitWall || hitSelf) {
         setGameOver(true);
-        setBest((b) => Math.max(b, score));
+        setBest((b) => {
+          if (score > b) {
+            saveBestScore(score);
+            setIsNewBest(true);
+            return score;
+          }
+          return b;
+        });
         return;
       }
 
@@ -144,7 +185,7 @@ export default function SnakeGame() {
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", width: CANVAS_PX, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted)" }}>
         <span>SCORE {score}</span>
-        <span>BEST {best}</span>
+        <span style={{ color: isNewBest ? "#ffc53d" : "var(--muted)", fontWeight: isNewBest ? 700 : 400 }}>BEST {best}</span>
       </div>
       <div style={{ position: "relative" }}>
         <canvas
@@ -163,9 +204,9 @@ export default function SnakeGame() {
             }}
           >
             <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "var(--paper)" }}>
-              {gameOver ? "Game over" : "Bored yet?"}
+              {gameOver ? (isNewBest ? "New best!" : "Game over") : "Bored yet?"}
             </span>
-            <span style={{ fontSize: 12, color: "var(--muted)" }}>
+            <span style={{ fontSize: 12, color: isNewBest ? "#ffc53d" : "var(--muted)" }}>
               {gameOver ? `Scored ${score} — click or press a key` : "Arrow keys or WASD to play"}
             </span>
           </div>

@@ -28,7 +28,7 @@ from pathlib import Path
 
 from transcribe import transcribe, save_transcript
 from cover_art import resolve_cover_art, extract_embedded_lyrics
-from render_video import make_full_lyric_video
+from render_video import make_full_lyric_video, get_audio_duration
 
 ASPECT_DIMENSIONS = {
     "16:9": (1920, 1080),
@@ -95,8 +95,9 @@ def run_lyric_video(
             save_transcript(transcript, f"{output_dir}/{stem}_transcript.json")
 
             print(f"      Running hybrid alignment (Whisper structure + local DTW, lang={lang})...")
-            from forced_align import hybrid_align
-            word_timings = hybrid_align(lyrics_text, transcript["segments"], input_path, align_work_dir, lang)
+            from hybrid_align import hybrid_align
+            total_duration = get_audio_duration(input_path)
+            word_timings = hybrid_align(lyrics_text, transcript["segments"], input_path, total_duration, align_work_dir, lang)
 
         from lyric_align import _chunk_words_into_lines
         precomputed_lines = _chunk_words_into_lines(word_timings)

@@ -150,6 +150,10 @@ def recut_one_concept(
     segments: list | None,
     precomputed_lines: list,
     safe_name: str,
+    caption_style: str = "pop_word",
+    caption_theme: str = "default",
+    caption_language: str = "en",
+    alignment_audio_path: str | None = None,
 ) -> str:
     """
     Re-render a SINGLE clip with precomputed (manually patched) lyric
@@ -178,6 +182,10 @@ def recut_one_concept(
             output_path=out_path,
             lyrics_enabled=True,
             precomputed_lines=precomputed_lines,
+            caption_style=caption_style,
+            caption_theme=caption_theme,
+            caption_language=caption_language,
+            alignment_audio_path=alignment_audio_path,
         )
     else:
         raw_path = f"{output_dir}/clip_{safe_name}_raw.mp4"
@@ -192,6 +200,10 @@ def recut_one_concept(
             output_path=out_path,
             lyrics_enabled=True,
             precomputed_lines=precomputed_lines,
+            caption_style=caption_style,
+            caption_theme=caption_theme,
+            caption_language=caption_language,
+            alignment_audio_path=alignment_audio_path,
         )
 
     return out_path
@@ -206,6 +218,11 @@ def cut_all_concepts(
     lyrics_enabled: bool = True,
     lyrics_text: str | None = None,
     on_clip_done=None,
+    caption_style: str = "pop_word",
+    caption_theme: str = "default",
+    caption_language: str = "en",
+    alignment_audio_path: str | None = None,
+    precomputed_lines: list | None = None,
 ) -> list:
     """
     Produce a final clip for every concept in a brief (as produced by
@@ -218,9 +235,25 @@ def cut_all_concepts(
     For audio-only sources: renders a 9:16 vertical video with album art
     background and optional karaoke-synced lyrics.
 
-    lyrics_text, if provided, is user-corrected lyrics aligned to real
-    audio timing instead of trusting Whisper's own transcription - see
-    lyric_align.py.
+    precomputed_lines, if given (e.g. from lyric_align.align_lyrics_best_
+    effort, computed ONCE for the whole song), is passed straight through
+    to every clip - each clip's own render call filters it down to just
+    its own time range (see make_vertical_clip's docstring), so passing
+    the same full-song lines list to every clip is correct, not a bug.
+    This is important: without it, each clip would instead fall back to
+    recomputing its OWN alignment from lyrics_text independently, using
+    the weaker Whisper-native-timestamp method - discarding whatever
+    better (e.g. forced-alignment) computation the caller already did
+    once, upstream, and silently redoing worse work per clip. Prefer this
+    over lyrics_text whenever a precomputed alignment already exists.
+
+    lyrics_text, if provided AND precomputed_lines is not, is user-
+    corrected lyrics aligned to real audio timing instead of trusting
+    Whisper's own transcription - see lyric_align.py. Ignored (each
+    clip uses precomputed_lines instead) when precomputed_lines is given.
+
+    caption_style/caption_theme are passed straight through to
+    render_video.py's build_captions_ass - see there for what each does.
 
     on_clip_done, if provided, is called as (index, total, concept,
     output_path) right after each individual clip finishes rendering - lets
@@ -259,6 +292,11 @@ def cut_all_concepts(
                 lyrics_enabled=lyrics_enabled,
                 lyrics_text=lyrics_text,
                 total_duration=total_duration,
+                precomputed_lines=precomputed_lines,
+                caption_style=caption_style,
+                caption_theme=caption_theme,
+                caption_language=caption_language,
+                alignment_audio_path=alignment_audio_path,
             )
         else:
             raw_path = f"{output_dir}/clip_{i}_{safe_name}_raw.mp4"
@@ -273,7 +311,12 @@ def cut_all_concepts(
                 output_path=out_path,
                 lyrics_text=lyrics_text,
                 total_duration=total_duration,
+                precomputed_lines=precomputed_lines,
                 lyrics_enabled=lyrics_enabled,
+                caption_style=caption_style,
+                caption_theme=caption_theme,
+                caption_language=caption_language,
+                alignment_audio_path=alignment_audio_path,
             )
 
         output_paths.append(out_path)
